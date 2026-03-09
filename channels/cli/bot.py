@@ -15,10 +15,11 @@ Commands:
 import asyncio
 import logging
 import os
-import sys
-from providers.base import Message
+from memory.history import ConversationHistory
 
 logger = logging.getLogger(__name__)
+
+CLI_USER_ID = "cli"
 
 
 class CLIBot:
@@ -27,6 +28,7 @@ class CLIBot:
 
     Prints a prompt, reads input, calls brain.think(), prints the response.
     Supports /clear, /status, and /quit commands.
+    Conversation history is persisted so sessions resume across restarts.
     """
 
     def __init__(self, brain):
@@ -35,7 +37,7 @@ class CLIBot:
             brain: The Brain instance to forward messages to.
         """
         self.brain = brain
-        self._history: list[Message] = []
+        self._history_store = ConversationHistory()
         self._running = False
 
     async def start(self) -> None:
@@ -43,8 +45,11 @@ class CLIBot:
         self._running = True
         agent_name = os.getenv("AGENT_NAME", "Atlas")
 
+        history = self._history_store.load(CLI_USER_ID)
+        resume_note = f" (resuming — {len(history)} messages)" if history else ""
+
         print(f"\n{'=' * 50}")
-        print(f"  {agent_name} — Personal AI Agent (CLI Mode)")
+        print(f"  {agent_name} — Personal AI Agent (CLI Mode){resume_note}")
         print(f"{'=' * 50}")
         print(f"  Commands: /clear, /status, /quit")
         print(f"{'=' * 50}\n")
@@ -53,7 +58,6 @@ class CLIBot:
 
         while self._running:
             try:
-                # Use run_in_executor so readline doesn't block the event loop
                 user_input = await loop.run_in_executor(
                     None, self._read_input, "You: "
                 )
@@ -65,25 +69,27 @@ class CLIBot:
             if not user_input:
                 continue
 
-            # Built-in commands
             if user_input.lower() in ("/quit", "/exit", "/q"):
                 print("Goodbye!")
                 break
             elif user_input.lower() == "/clear":
-                self._history = []
+                self._history_store.clear(CLI_USER_ID)
                 print("🧹 Conversation cleared.\n")
+                history = []
                 continue
             elif user_input.lower() == "/status":
-                self._print_status()
+                history = self._history_store.load(CLI_USER_ID)
+                self._print_status(len(history))
                 continue
 
-            # Forward to the brain
             print()
+            history = self._history_store.load(CLI_USER_ID)
             try:
-                response, self._history = await self.brain.think(
+                response, updated_history = await self.brain.think(
                     user_message=user_input,
-                    conversation_history=self._history,
+                    conversation_history=history,
                 )
+                self._history_store.save(CLI_USER_ID, updated_history)
                 print(f"{agent_name}: {response}\n")
             except Exception as e:
                 logger.exception("Error in brain.think()")
@@ -98,17 +104,19 @@ class CLIBot:
         except EOFError:
             raise
 
-    def _print_status(self) -> None:
+    def _print_status(self, history_len: int) -> None:
         """Print current agent status to stdout."""
         agent_name = os.getenv("AGENT_NAME", "Atlas")
         provider_name = self.brain.provider.model_name
         skills = self.brain.skills.all_skill_names()
+        context_entries = len(self.brain.memory.parse_context_entries())
         print(
             f"\n🤖 Agent Status\n"
-            f"   Name:                {agent_name}\n"
-            f"   Model:               {provider_name}\n"
-            f"   Conversation length: {len(self._history)} messages\n"
-            f"   Skills:              {', '.join(skills) or 'none'}\n"
+            f"   Name:              {agent_name}\n"
+            f"   Model:             {provider_name}\n"
+            f"   Conversation:      {history_len} messages\n"
+            f"   Long-term memories:{context_entries}\n"
+            f"   Skills:            {', '.join(skills) or 'none'}\n"
         )
 
     async def stop(self) -> None:

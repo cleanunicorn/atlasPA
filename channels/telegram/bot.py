@@ -13,7 +13,9 @@ import logging
 import os
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-from providers.base import Message
+from memory.history import ConversationHistory
+
+logger = logging.getLogger(__name__)
 
 # Persistent reply keyboard shown to all authorised users
 _MAIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -21,8 +23,6 @@ _MAIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
     is_persistent=True,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class TelegramBot:
@@ -37,9 +37,8 @@ class TelegramBot:
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN not set in environment")
 
-        # Per-user conversation history (in-memory; resets on restart)
-        # Phase 2 will persist these to disk
-        self._conversations: dict[int, list[Message]] = {}
+        # Persistent conversation history (survives restarts)
+        self._history = ConversationHistory()
 
         # Allowed user IDs (security gate)
         allowed_raw = os.getenv("TELEGRAM_ALLOWED_USERS", "")
@@ -62,7 +61,7 @@ class TelegramBot:
 
     def _is_allowed(self, user_id: int) -> bool:
         if not self._allowed_users:
-            return True  # Open access if no list configured
+            return True
         return user_id in self._allowed_users
 
     def _register_handlers(self):
@@ -79,8 +78,14 @@ class TelegramBot:
             await update.message.reply_text("⛔ Unauthorized.")
             return
         agent_name = os.getenv("AGENT_NAME", "Atlas")
+        history_len = len(self._history.load(str(user.id)))
+        resume_note = (
+            f" (resuming — {history_len} messages in history)"
+            if history_len
+            else ""
+        )
         await update.message.reply_text(
-            f"👋 Hi, I'm {agent_name}! Your personal AI agent.\n\n"
+            f"👋 Hi, I'm {agent_name}! Your personal AI agent.{resume_note}\n\n"
             f"Just send me a message to get started.",
             reply_markup=_MAIN_KEYBOARD,
         )
@@ -90,7 +95,7 @@ class TelegramBot:
         if not self._is_allowed(user_id):
             await update.message.reply_text("⛔ Unauthorized.")
             return
-        self._conversations[user_id] = []
+        self._history.clear(str(user_id))
         await update.message.reply_text("🧹 Conversation cleared.", reply_markup=_MAIN_KEYBOARD)
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,13 +103,15 @@ class TelegramBot:
         if not self._is_allowed(user_id):
             await update.message.reply_text("⛔ Unauthorized.")
             return
-        history = self._conversations.get(user_id, [])
+        history = self._history.load(str(user_id))
         provider_name = self.brain.provider.model_name
         skills = self.brain.skills.all_skill_names()
+        context_entries = len(self.brain.memory.parse_context_entries())
         await update.message.reply_text(
             f"🤖 **Agent Status**\n"
             f"Model: `{provider_name}`\n"
-            f"Conversation length: {len(history)} messages\n"
+            f"Conversation: {len(history)} messages\n"
+            f"Long-term memories: {context_entries}\n"
             f"Skills: {', '.join(skills) or 'none'}",
             reply_markup=_MAIN_KEYBOARD,
         )
@@ -116,28 +123,24 @@ class TelegramBot:
             return
 
         user_text = update.message.text
-        user_id = user.id
+        user_id = str(user.id)
 
-        logger.info(f"Message from {user.username or user_id}: {user_text[:100]}")
+        logger.info(f"Message from {user.username or user.id}: {user_text[:100]}")
 
-        # Show typing indicator
         await update.message.chat.send_action("typing")
 
-        # Get or init conversation history for this user
-        history = self._conversations.get(user_id, [])
+        history = self._history.load(user_id)
 
         try:
             response_text, updated_history = await self.brain.think(
                 user_message=user_text,
                 conversation_history=history,
             )
-            self._conversations[user_id] = updated_history
+            self._history.save(user_id, updated_history)
 
-            # Telegram has a 4096 char limit per message
             if len(response_text) > 4000:
                 chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
                 for i, chunk in enumerate(chunks):
-                    # Only attach keyboard to the last chunk
                     markup = _MAIN_KEYBOARD if i == len(chunks) - 1 else None
                     await update.message.reply_text(chunk, reply_markup=markup)
             else:
