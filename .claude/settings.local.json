@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync)",
+      "Bash(ANTHROPIC_API_KEY=test uv run python gateway.py --help)",
+      "Bash(ANTHROPIC_API_KEY=test LOG_LEVEL=DEBUG uv run python -c \":*)",
+      "Bash(uv run python -m pytest tests/ -v)",
+      "Bash(uv run python -c \"from channels.telegram.bot import TelegramBot; print\\(''OK''\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+"""channels/telegram — Telegram adapter."""
