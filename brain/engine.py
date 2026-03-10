@@ -17,6 +17,7 @@ Phase 2 additions:
 """
 
 import logging
+from pathlib import Path
 from providers.base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
@@ -38,6 +39,8 @@ class Brain:
         self.provider = provider
         self.memory = memory
         self.skills = skills
+        self._pending_files: list[tuple[Path, str]] = []  # (path, caption) queued by send_file
+        self.heartbeat = None  # Set by gateway after Heartbeat is created
 
         # Built-in tools — always available, regardless of installed skills
         self._builtin_tools = [
@@ -76,10 +79,87 @@ class Brain:
                     "required": ["note"],
                 },
             ),
+            ToolDefinition(
+                name="send_file",
+                description=(
+                    "Send a file (image, document, screenshot) to the user. "
+                    "Use this after creating or saving a file that the user should receive. "
+                    "Works for screenshots, exported files, generated images, etc."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to send",
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Optional caption to accompany the file",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolDefinition(
+                name="schedule_job",
+                description=(
+                    "Schedule a recurring or one-time background task. "
+                    "The job will run automatically and send you a message with the result. "
+                    "Use a cron expression for recurring jobs (e.g. '0 8 * * *' for daily at 8am), "
+                    "or an ISO datetime string for one-time jobs (e.g. '2026-03-10 15:00')."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Unique identifier for this job (e.g. 'morning_briefing')",
+                        },
+                        "schedule": {
+                            "type": "string",
+                            "description": "Cron expression ('0 8 * * 1' = Mondays at 8am) or ISO datetime for one-time",
+                        },
+                        "prompt": {
+                            "type": "string",
+                            "description": "The message to send to yourself when this job runs",
+                        },
+                    },
+                    "required": ["id", "schedule", "prompt"],
+                },
+            ),
+            ToolDefinition(
+                name="list_jobs",
+                description="List all scheduled background jobs and their status.",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolDefinition(
+                name="delete_job",
+                description="Delete a scheduled background job by its id.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "The job id to delete",
+                        }
+                    },
+                    "required": ["id"],
+                },
+            ),
         ]
 
     def _get_all_tools(self) -> list[ToolDefinition]:
         return self._builtin_tools + self.skills.get_tool_definitions()
+
+    def take_files(self) -> list[Path]:
+        """
+        Return and clear the list of files queued by send_file tool calls.
+        Called by channels after think() to deliver files to the user.
+        """
+        files: list[tuple[Path, str]]
+        files, self._pending_files = self._pending_files, []
+        return files
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
         """Execute a tool call and return the result as a string."""
@@ -101,6 +181,54 @@ class Brain:
             result = self.memory.forget_entry(note)
             logger.info(f"Forget request: '{note[:80]}' → {result[:80]}")
             return result
+
+        if tool_call.name == "send_file":
+            path = Path(tool_call.arguments.get("path", "")).expanduser()
+            caption = tool_call.arguments.get("caption", "")
+            if not path.exists():
+                return f"Error: file not found: {path}"
+            self._pending_files.append((path, caption))
+            logger.info(f"File queued for delivery: {path.name}")
+            return f"✅ File queued: {path.name} — it will be sent to the user."
+
+        if tool_call.name == "schedule_job":
+            from heartbeat.jobs import Job, upsert_job
+            job = Job(
+                id=tool_call.arguments.get("id", "").strip(),
+                schedule=tool_call.arguments.get("schedule", ""),
+                prompt=tool_call.arguments.get("prompt", ""),
+                enabled=True,
+            )
+            if not job.id or not job.schedule or not job.prompt:
+                return "Error: 'id', 'schedule', and 'prompt' are all required."
+            upsert_job(job)
+            if self.heartbeat:
+                self.heartbeat.reload_jobs()
+            logger.info(f"Scheduled job '{job.id}': {job.schedule}")
+            return f"✅ Job '{job.id}' scheduled: {job.schedule}"
+
+        if tool_call.name == "list_jobs":
+            from heartbeat.jobs import load_jobs
+            jobs = load_jobs()
+            if not jobs:
+                return "No scheduled jobs."
+            lines = ["Scheduled jobs:"]
+            for j in jobs:
+                status = "✅ enabled" if j.enabled else "⏸ disabled"
+                lines.append(f"  • {j.id} [{status}]  schedule: {j.schedule}")
+                lines.append(f"    prompt: {j.prompt[:80]}{'…' if len(j.prompt) > 80 else ''}")
+            return "\n".join(lines)
+
+        if tool_call.name == "delete_job":
+            from heartbeat.jobs import remove_job
+            job_id = tool_call.arguments.get("id", "")
+            removed = remove_job(job_id)
+            if not removed:
+                return f"No job found with id '{job_id}'."
+            if self.heartbeat:
+                self.heartbeat.reload_jobs()
+            logger.info(f"Deleted job '{job_id}'")
+            return f"✅ Job '{job_id}' deleted."
 
         if tool_call.name.startswith("skill_"):
             skill_name = tool_call.name[len("skill_"):]
@@ -127,6 +255,8 @@ class Brain:
         Returns:
             (final_response_text, updated_history)
         """
+        self._pending_files = []  # Clear any leftover files from previous turn
+
         # Build system prompt — pass query for relevance-filtered context injection
         skills_summary = self.skills.get_skills_summary()
         system = self.memory.build_system_prompt(skills_summary, query=user_message)

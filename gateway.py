@@ -10,8 +10,10 @@ Responsibilities:
     4. Handle graceful shutdown on SIGINT/SIGTERM
 
 Run modes:
-    python gateway.py          — Telegram bot (default)
-    python gateway.py --cli    — Interactive terminal session
+    python gateway.py             — Telegram bot (default)
+    python gateway.py --cli       — Interactive terminal session
+    python gateway.py --discord   — Discord bot
+    python gateway.py --web       — Browser-based web UI (http://localhost:7860)
 """
 
 import argparse
@@ -46,13 +48,19 @@ async def run_cli(brain) -> None:
     await cli.start()
 
 
-async def run_telegram(brain) -> None:
-    """Run the agent as a Telegram bot."""
-    from channels.telegram.bot import TelegramBot
-    from heartbeat.scheduler import Heartbeat
+async def _run_with_heartbeat(brain, channel) -> None:
+    """
+    Generic runner: start a channel + heartbeat, wait for shutdown signal.
 
-    heartbeat = Heartbeat(brain=brain)
-    telegram = TelegramBot(brain=brain)
+    channel must expose:
+        .push_message(text, files)   — used as notify_callback
+        .start()
+        .stop()
+    """
+    from heartbeat import Heartbeat
+
+    heartbeat = Heartbeat(brain=brain, notify_callback=channel.push_message)
+    brain.heartbeat = heartbeat  # Back-reference so brain tools can reload jobs
 
     stop_event = asyncio.Event()
 
@@ -65,28 +73,57 @@ async def run_telegram(brain) -> None:
 
     try:
         await heartbeat.start()
-        await telegram.start()
+        await channel.start()
 
         agent_name = os.getenv("AGENT_NAME", "Atlas")
-        logger.info(f"✅ {agent_name} is running! Open Telegram and say hello.")
-        logger.info("   Press Ctrl+C to stop.\n")
+        logger.info(f"✅ {agent_name} is running! Press Ctrl+C to stop.\n")
 
         await stop_event.wait()
 
     finally:
         logger.info("Shutting down components...")
-        await telegram.stop()
+        await channel.stop()
         await heartbeat.stop()
         logger.info("Goodbye.")
 
 
+async def run_telegram(brain) -> None:
+    """Run the agent as a Telegram bot."""
+    from channels.telegram.bot import TelegramBot
+
+    telegram = TelegramBot(brain=brain)
+    agent_name = os.getenv("AGENT_NAME", "Atlas")
+    logger.info(f"✅ {agent_name} — open Telegram and say hello.")
+    await _run_with_heartbeat(brain, telegram)
+
+
+async def run_discord(brain) -> None:
+    """Run the agent as a Discord bot."""
+    from channels.discord.bot import DiscordBot
+
+    discord_bot = DiscordBot(brain=brain)
+    agent_name = os.getenv("AGENT_NAME", "Atlas")
+    logger.info(f"✅ {agent_name} — invite the bot to your server or DM it.")
+    await _run_with_heartbeat(brain, discord_bot)
+
+
+async def run_web(brain) -> None:
+    """Run the agent as a web UI."""
+    from channels.web.bot import WebBot
+
+    host = os.getenv("WEB_HOST", "0.0.0.0")
+    port = int(os.getenv("WEB_PORT", "7860"))
+    web = WebBot(brain=brain, host=host, port=port)
+    logger.info(f"Web UI → http://localhost:{port}")
+    await _run_with_heartbeat(brain, web)
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Atlas — Personal AI Agent")
-    parser.add_argument(
-        "--cli",
-        action="store_true",
-        help="Run in interactive CLI mode instead of Telegram",
-    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--cli", action="store_true", help="Interactive terminal session")
+    mode.add_argument("--discord", action="store_true", help="Discord bot")
+    mode.add_argument("--web", action="store_true", help="Browser-based web UI")
     args = parser.parse_args()
 
     logger.info("=" * 50)
@@ -120,6 +157,10 @@ async def main() -> None:
     # ── 5. Run ────────────────────────────────────────────────────────────────
     if args.cli:
         await run_cli(brain)
+    elif args.discord:
+        await run_discord(brain)
+    elif args.web:
+        await run_web(brain)
     else:
         await run_telegram(brain)
 

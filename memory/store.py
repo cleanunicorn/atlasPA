@@ -1,4 +1,4 @@
-file_ops"""
+"""
 memory/store.py
 
 Persistent memory via local markdown files.

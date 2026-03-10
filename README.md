@@ -19,10 +19,10 @@ config/             — Configuration and secrets
 
 - [x] Phase 1 — Core loop: Telegram + CLI + Brain + Model-agnostic providers + Memory + Skills
 - [x] Phase 2 — Richer memory: persistent history, relevance filtering, auto-summarisation, `forget` tool
-- [ ] Phase 3 — More skills (shell exec, browser, calendar, email)
-- [ ] Phase 4 — Heartbeat / proactive scheduler
-- [ ] Phase 5 — More channels (Discord, web UI)
-- [ ] Phase 6 — Security hardening (approval workflows, sandboxing)
+- [x] Phase 3 — More skills: `shell_exec`, `http_request`, `code_runner`, `browser` (Playwright)
+- [x] Phase 4 — Heartbeat: cron scheduler, `schedule_job` / `list_jobs` / `delete_job` tools, proactive Telegram push
+- [ ] Phase 5 — Calendar manager
+- [ ] Phase 6 — Advanced reasoning
 
 ## Setup
 
@@ -55,6 +55,14 @@ Skills are auto-discovered at startup. No changes to any existing file needed.
 3. Implement `complete(messages, tools, system) -> LLMResponse`
 4. Register it in `providers/__init__.py`
 5. Set `LLM_PROVIDER=<name>` in `config/.env`
+
+## Browser skill (Playwright)
+
+The `browser` skill requires downloading Chromium once:
+
+```bash
+uv run playwright install chromium
+```
 
 ## Running tests
 

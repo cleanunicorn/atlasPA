@@ -91,6 +91,9 @@ class CLIBot:
                 )
                 self._history_store.save(CLI_USER_ID, updated_history)
                 print(f"{agent_name}: {response}\n")
+                for path, caption in self.brain.take_files():
+                    note = f" — {caption}" if caption else ""
+                    print(f"📎 File: {path}{note}\n")
             except Exception as e:
                 logger.exception("Error in brain.think()")
                 print(f"⚠️  Error: {e}\n")

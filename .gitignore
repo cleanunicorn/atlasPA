@@ -237,3 +237,12 @@ heartbeat/jobs/state/
 memory/history/
 memory/*.db
 memory/*.sqlite
+
+# Awareness loop state (Phase 4)
+memory/awareness_log.json
+
+# Google Calendar — tokens and credentials (one set per account)
+config/google_token*.json
+config/google_credentials*.json
+config/google_accounts.json
+config/jobs.json
