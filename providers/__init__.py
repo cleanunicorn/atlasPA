@@ -27,8 +27,11 @@ def get_provider() -> BaseLLMProvider:
     elif provider_name == "ollama":
         from .ollama_provider import OllamaProvider
         return OllamaProvider()
+    elif provider_name == "openrouter":
+        from .openrouter_provider import OpenRouterProvider
+        return OpenRouterProvider()
     else:
         raise ValueError(
             f"Unknown LLM provider: '{provider_name}'. "
-            "Supported values: anthropic, openai, ollama"
+            "Supported values: anthropic, openai, ollama, openrouter"
         )
