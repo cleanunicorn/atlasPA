@@ -50,6 +50,7 @@ PARAMETERS = {
                 "create_event",
                 "update_event",
                 "delete_event",
+                "rsvp_event",
                 "find_conflicts",
                 "find_duplicates",
             ],
@@ -109,9 +110,22 @@ PARAMETERS = {
             "type": "string",
             "description": "Event location string.",
         },
+        "rsvp_filter": {
+            "type": "string",
+            "enum": ["needsAction", "accepted", "declined", "tentative"],
+            "description": (
+                "Filter list_events to only show events with this RSVP status. "
+                "Use 'needsAction' to see pending invitations that need a response."
+            ),
+        },
         "event_id": {
             "type": "string",
-            "description": "Google Calendar event ID (required for update_event / delete_event).",
+            "description": "Google Calendar event ID (required for update_event / delete_event / rsvp_event).",
+        },
+        "response": {
+            "type": "string",
+            "enum": ["accepted", "declined", "tentative"],
+            "description": "RSVP response status (required for rsvp_event).",
         },
         "credentials_path": {
             "type": "string",
@@ -205,7 +219,7 @@ def _get_service(account: dict):
             creds = flow.run_local_server(port=0)
         token_file.write_text(creds.to_json())
 
-    return build("calendar", "v3", credentials=creds)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
 def _get_services(account_name: str) -> list[tuple[str, object]]:
@@ -281,6 +295,22 @@ def _label(account_name: str, calendar_name: str, multi_account: bool) -> str:
     return calendar_name
 
 
+_RSVP_EMOJI = {
+    "accepted":    "✅",
+    "declined":    "❌",
+    "tentative":   "❓",
+    "needsAction": "📨",
+}
+
+
+def _self_rsvp(event: dict) -> str | None:
+    """Return the current user's responseStatus for an event, or None if not an invite."""
+    for attendee in event.get("attendees", []):
+        if attendee.get("self"):
+            return attendee.get("responseStatus")
+    return None
+
+
 def _fmt_event(event: dict) -> str:
     summary = event.get("summary", "(no title)")
     start = event.get("start", {})
@@ -302,13 +332,19 @@ def _fmt_event(event: dict) -> str:
     loc = event.get("location", "")
     eid = event.get("id", "")
     label = event.get("_label", "")
+    rsvp = _self_rsvp(event)
 
     line1 = f"• {dt_str}"
     if end_str:
         line1 += f"–{end_str}"
-    line1 += f"  {summary}"
+    if rsvp:
+        line1 += f"  {_RSVP_EMOJI.get(rsvp, '')} {summary}"
+    else:
+        line1 += f"  {summary}"
 
     line2_parts = []
+    if rsvp:
+        line2_parts.append(f"rsvp:{rsvp}")
     if loc:
         line2_parts.append(f"📍 {loc}")
     if label:
@@ -490,6 +526,7 @@ def _list_events_multi(
     time_min: str,
     time_max: str,
     max_results: int,
+    rsvp_filter: str = "",
 ) -> str:
     multi_account = len(services) > 1
     all_events: list[dict] = []
@@ -526,7 +563,12 @@ def _list_events_multi(
                 ev["_label"] = _label(acct_name, cal_name, multi_account)
                 all_events.append(ev)
 
+    if rsvp_filter:
+        all_events = [ev for ev in all_events if _self_rsvp(ev) == rsvp_filter]
+
     if not all_events:
+        if rsvp_filter:
+            return f"No events with RSVP status '{rsvp_filter}' found in the specified time range."
         return "No events found in the specified time range."
 
     def sort_key(ev):
@@ -578,6 +620,41 @@ def _update_event(service, calendar_id: str, event_id: str, **fields) -> str:
 def _delete_event(service, calendar_id: str, event_id: str) -> str:
     service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
     return f"✅ Event {event_id} deleted from calendar '{calendar_id}'."
+
+
+def _rsvp_event(service, calendar_id: str, event_id: str, response: str) -> str:
+    """Accept, decline, or mark tentative an event invitation."""
+    valid = {"accepted", "declined", "tentative"}
+    if response not in valid:
+        return f"Error: response must be one of {sorted(valid)}, got '{response}'."
+
+    event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+    attendees = event.get("attendees", [])
+
+    # Find the self attendee and update their status
+    self_attendee = next((a for a in attendees if a.get("self")), None)
+    if self_attendee is None:
+        # Not an invite — patch anyway (some events have no attendee list)
+        return (
+            f"Error: no attendee entry found for this account on event '{event.get('summary', event_id)}'. "
+            "This event may not be an invitation."
+        )
+
+    self_attendee["responseStatus"] = response
+    event["attendees"] = attendees
+
+    updated = service.events().patch(
+        calendarId=calendar_id,
+        eventId=event_id,
+        body={"attendees": attendees},
+        sendUpdates="all",
+    ).execute()
+
+    emoji = {"accepted": "✅", "declined": "❌", "tentative": "❓"}[response]
+    return (
+        f"{emoji} RSVP recorded: {response} for '{updated.get('summary', event_id)}'\n"
+        f"   Calendar: {calendar_id}  ID: {event_id}"
+    )
 
 
 def _find_conflicts_multi(services: list[tuple[str, object]], time_min: str, time_max: str) -> str:
@@ -686,7 +763,9 @@ async def run(
     end: str = "",
     description: str = "",
     location: str = "",
+    rsvp_filter: str = "",
     event_id: str = "",
+    response: str = "",
     credentials_path: str = "",
     account_name: str = "",
     **_,
@@ -730,10 +809,10 @@ async def run(
 
         elif action == "list_events":
             return await asyncio.to_thread(
-                _list_events_multi, services, cal, t_min, t_max, max_results
+                _list_events_multi, services, cal, t_min, t_max, max_results, rsvp_filter
             )
 
-        elif action in ("create_event", "update_event", "delete_event"):
+        elif action in ("create_event", "update_event", "delete_event", "rsvp_event"):
             # Write operations need exactly one account+service
             if multi_account:
                 return (
@@ -757,10 +836,16 @@ async def run(
                     summary=summary, start=start, end=end,
                     description=description, location=location,
                 )
-            else:  # delete_event
+            elif action == "delete_event":
                 if not event_id:
                     return "Error: delete_event requires 'event_id'."
                 return await asyncio.to_thread(_delete_event, svc, target_cal, event_id)
+            else:  # rsvp_event
+                if not event_id:
+                    return "Error: rsvp_event requires 'event_id'."
+                if not response:
+                    return "Error: rsvp_event requires 'response' (accepted / declined / tentative)."
+                return await asyncio.to_thread(_rsvp_event, svc, target_cal, event_id, response)
 
         elif action == "find_conflicts":
             return await asyncio.to_thread(_find_conflicts_multi, services, t_min, t_max)
@@ -772,7 +857,7 @@ async def run(
             return (
                 f"Unknown action '{action}'. Valid actions: list_accounts, setup_account, "
                 "list_calendars, list_events, create_event, update_event, delete_event, "
-                "find_conflicts, find_duplicates."
+                "rsvp_event, find_conflicts, find_duplicates."
             )
 
     except Exception as e:

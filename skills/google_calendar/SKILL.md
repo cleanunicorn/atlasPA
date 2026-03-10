@@ -13,6 +13,7 @@ Read and manage Google Calendar events across multiple Google accounts and calen
 | `create_event`    | Create a new event. Requires specifying the target account.                    |
 | `update_event`    | Update an existing event. Requires specifying the target account.              |
 | `delete_event`    | Delete an event. Requires specifying the target account.                       |
+| `rsvp_event`      | Accept, decline, or mark tentative an event invitation.                        |
 | `find_conflicts`  | Find overlapping events across all accounts and calendars.                     |
 | `find_duplicates` | Find events that may be the same meeting copied across accounts or calendars.  |
 
@@ -21,6 +22,8 @@ Read and manage Google Calendar events across multiple Google accounts and calen
 - `account` — `"all"` (default) or a specific account name like `"personal"` / `"work"`.
   Required for `create_event`, `update_event`, `delete_event`.
 - `calendar_id` — `"all"` (default), `"primary"`, or a specific calendar ID from `list_calendars`.
+- `response` — `"accepted"`, `"declined"`, or `"tentative"` (required for `rsvp_event`).
+- `rsvp_filter` — Filter `list_events` by RSVP status: `"needsAction"`, `"accepted"`, `"declined"`, `"tentative"`.
 - `time_min` / `time_max` — ISO 8601 date or datetime. Default: now → +7 days.
 
 ## When to use
@@ -33,6 +36,10 @@ Read and manage Google Calendar events across multiple Google accounts and calen
 - "Are there any duplicate events across my calendars?" → `find_duplicates`
 - "Which accounts are set up?" → `list_accounts`
 - "I sent you a credentials file, set it up as my work account" → `setup_account`
+- "Accept the team standup invite" → `rsvp_event` with `response="accepted"`
+- "Decline the dentist appointment" → `rsvp_event` with `response="declined"`
+- "What invites haven't I responded to?" → `list_events` with `rsvp_filter="needsAction"`
+- "Which events did I accept this week?" → `list_events` with `rsvp_filter="accepted"`
 
 ## Duplicate detection
 

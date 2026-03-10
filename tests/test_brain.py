@@ -62,7 +62,10 @@ def empty_skills(tmp_path: Path) -> SkillRegistry:
     """A SkillRegistry with no skills."""
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    with patch("skills.registry.SKILLS_DIR", skills_dir):
+    with (
+        patch("skills.registry.CORE_SKILLS_DIR", skills_dir),
+        patch("skills.registry.ADDON_SKILLS_DIR", tmp_path / "addon_skills"),
+    ):
         registry = SkillRegistry()
     return registry
 

@@ -1,39 +1,47 @@
 """
 skills/registry.py
 
-Discovers skills from the skills/ directory.
+Discovers and manages skills from two locations:
+
+  Core skills   — skills/ directory (bundled with Atlas source, read-only)
+  Addon skills  — ~/agent-files/skills/ (user-installed via the gateway)
+
 Each skill is a folder containing:
     SKILL.md   — Description and usage (read by the LLM on demand)
     tool.py    — Python implementation with a `run(**kwargs) -> str` function
                  and an optional PARAMETERS dict (JSON Schema)
 
-Design (mirrors OpenClaw):
+Design:
     - The registry builds a compact index (name + description) injected into
       the system prompt. The LLM sees only the index, NOT the full SKILL.md.
     - When the LLM calls a skill tool, the registry executes tool.py.
-    - This keeps the context window lean. Skill details are read on demand.
+    - Addon skills can be installed / uninstalled at runtime via manage_skills.
+    - reload() re-discovers both directories without restarting Atlas.
 """
 
+import ast
 import asyncio
 import importlib.util
 import logging
+import shutil
 from pathlib import Path
 from providers.base import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-SKILLS_DIR = Path(__file__).parent
+CORE_SKILLS_DIR = Path(__file__).parent
+ADDON_SKILLS_DIR = Path.home() / "agent-files" / "skills"
 
 
 class Skill:
     """A single skill loaded from a skills/<name>/ directory."""
 
-    def __init__(self, name: str, description: str, path: Path):
+    def __init__(self, name: str, description: str, path: Path, source: str = "core"):
         self.name = name
         self.description = description
         self.path = path
+        self.source = source  # "core" or "addon"
         self._module = None
-        # Eagerly load the module to extract PARAMETERS schema
         self._load_module()
 
     def _load_module(self) -> None:
@@ -73,7 +81,6 @@ class Skill:
 
     def to_tool_definition(self) -> ToolDefinition:
         """Convert this skill to a ToolDefinition the LLM can call."""
-        # Use PARAMETERS from tool.py if defined, otherwise use a generic schema
         default_schema = {
             "type": "object",
             "properties": {
@@ -93,18 +100,24 @@ class Skill:
 
 
 class SkillRegistry:
-    """Auto-discovers and manages all skills in the skills/ directory."""
+    """Auto-discovers and manages all skills in both the core and addon directories."""
 
     def __init__(self):
         self._skills: dict[str, Skill] = {}
         self._discover()
 
+    # ── Discovery ──────────────────────────────────────────────────────────────
+
     def _discover(self) -> None:
-        """Scan the skills/ directory and register all valid skills."""
-        for skill_dir in sorted(SKILLS_DIR.iterdir()):
-            if not skill_dir.is_dir():
-                continue
-            if skill_dir.name.startswith("_"):
+        """Scan core and addon directories and register all valid skills."""
+        self._skills.clear()
+        self._scan_dir(CORE_SKILLS_DIR, source="core")
+        if ADDON_SKILLS_DIR.exists():
+            self._scan_dir(ADDON_SKILLS_DIR, source="addon")
+
+    def _scan_dir(self, directory: Path, source: str) -> None:
+        for skill_dir in sorted(directory.iterdir()):
+            if not skill_dir.is_dir() or skill_dir.name.startswith("_"):
                 continue
 
             skill_md = skill_dir / "SKILL.md"
@@ -113,7 +126,6 @@ class SkillRegistry:
             if not skill_md.exists() and not tool_py.exists():
                 continue
 
-            # Extract description from first non-header line of SKILL.md
             description = f"Skill: {skill_dir.name}"
             if skill_md.exists():
                 for line in skill_md.read_text().splitlines():
@@ -122,18 +134,111 @@ class SkillRegistry:
                         description = line[:200]
                         break
 
-            skill = Skill(name=skill_dir.name, description=description, path=skill_dir)
-            self._skills[skill_dir.name] = skill
-            logger.info(f"Registered skill: {skill_dir.name}")
+            # Addon skills with the same name as a core skill are skipped
+            name = skill_dir.name
+            if name in self._skills:
+                logger.warning(
+                    f"Addon skill '{name}' conflicts with a core skill — skipped."
+                )
+                continue
+
+            skill = Skill(name=name, description=description, path=skill_dir, source=source)
+            self._skills[name] = skill
+            logger.info(f"Registered {source} skill: {name}")
+
+    def reload(self) -> None:
+        """Re-discover both directories. Picks up newly installed addon skills."""
+        logger.info("Reloading skill registry…")
+        self._discover()
+        logger.info(f"Skill registry reloaded — {len(self._skills)} skill(s) active.")
+
+    # ── Install / uninstall ────────────────────────────────────────────────────
+
+    def install(self, name: str, skill_md: str, tool_py: str) -> str:
+        """
+        Write an addon skill to ~/agent-files/skills/<name>/ and reload.
+
+        Validates:
+          - name is a Python identifier
+          - tool_py parses without syntax errors
+          - tool_py defines a top-level `run` function (sync or async)
+        """
+        name = name.strip().lower().replace(" ", "_").replace("-", "_")
+        if not name or not name.isidentifier():
+            return (
+                f"Error: '{name}' is not a valid skill name. "
+                "Use lowercase letters, digits, and underscores only."
+            )
+
+        if name in self._skills and self._skills[name].source == "core":
+            return f"Error: '{name}' is a core skill and cannot be overwritten."
+
+        if not tool_py.strip():
+            return "Error: tool_py (the Python implementation) is required."
+
+        # Syntax check
+        try:
+            tree = ast.parse(tool_py)
+        except SyntaxError as e:
+            return f"Error: tool.py has a syntax error: {e}"
+
+        # Must have a run() function
+        has_run = any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+            for node in ast.walk(tree)
+        )
+        if not has_run:
+            return (
+                "Error: tool.py must define a `run` function "
+                "(e.g. `async def run(**kwargs) -> str:`)."
+            )
+
+        skill_dir = ADDON_SKILLS_DIR / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(skill_md or f"# {name}\n\nAddon skill.")
+        (skill_dir / "tool.py").write_text(tool_py)
+
+        self.reload()
+        return (
+            f"✅ Addon skill '{name}' installed successfully.\n"
+            f"   Saved to: {skill_dir}\n"
+            f"   Call it as: skill_{name}"
+        )
+
+    def uninstall(self, name: str) -> str:
+        """Delete an addon skill directory and reload the registry."""
+        skill = self._skills.get(name)
+        if skill is None:
+            return f"Error: no skill named '{name}' is installed."
+        if skill.source == "core":
+            return f"Error: '{name}' is a core skill and cannot be uninstalled via manage_skills."
+
+        shutil.rmtree(skill.path)
+        self.reload()
+        return f"✅ Addon skill '{name}' uninstalled and removed."
+
+    # ── Query ──────────────────────────────────────────────────────────────────
 
     def get_skills_summary(self) -> str:
         """
-        Compact index of all skills injected into the system prompt.
-        The LLM sees name + one-line description, not the full SKILL.md.
+        Compact index injected into the system prompt.
+        Groups core and addon skills separately so the LLM knows what's user-installed.
         """
         if not self._skills:
             return "_No skills loaded._"
-        lines = [f"- **{name}**: {skill.description}" for name, skill in self._skills.items()]
+
+        core = [(n, s) for n, s in self._skills.items() if s.source == "core"]
+        addon = [(n, s) for n, s in self._skills.items() if s.source == "addon"]
+
+        lines = []
+        if core:
+            lines.append("**Core skills:**")
+            for name, skill in core:
+                lines.append(f"  - **{name}**: {skill.description}")
+        if addon:
+            lines.append("**Addon skills** (user-installed, can be uninstalled):")
+            for name, skill in addon:
+                lines.append(f"  - **{name}**: {skill.description}")
         return "\n".join(lines)
 
     def get_tool_definitions(self) -> list[ToolDefinition]:
@@ -146,4 +251,4 @@ class SkillRegistry:
 
     def all_skill_names(self) -> list[str]:
         """Return a sorted list of all registered skill names."""
-        return list(self._skills.keys())
+        return sorted(self._skills.keys())

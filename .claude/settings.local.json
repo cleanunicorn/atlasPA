@@ -8,7 +8,12 @@
       "Bash(uv run python -c \"from channels.telegram.bot import TelegramBot; print\\(''OK''\\)\")",
       "Bash(uv run python -m pytest tests/ -q)",
       "Bash(uv run playwright install chromium)",
-      "Bash(uv run python -m pytest tests/test_google_calendar.py -q)"
+      "Bash(uv run python -m pytest tests/test_google_calendar.py -q)",
+      "Bash(uv run python -m pytest tests/test_skill_manager.py -q)",
+      "Bash(uv run python -m pytest tests/ -q --ignore=tests/test_skills.py)",
+      "Bash(uv run python -m pytest tests/test_heartbeat.py::test_scheduler_job_failure_doesnt_crash -q)",
+      "Bash(uv run python *)",
+      "Bash(uv add \"typer[all]>=0.12\")"
     ]
   }
 }

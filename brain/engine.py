@@ -17,6 +17,7 @@ Phase 2 additions:
 """
 
 import logging
+import re
 from pathlib import Path
 from providers.base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
 from memory.store import MemoryStore
@@ -25,6 +26,29 @@ from skills.registry import SkillRegistry
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10  # Safety cap on the ReAct loop
+
+# ── Response sanitisation ─────────────────────────────────────────────────────
+
+# Some local models (Ollama) leak raw XML tool-call syntax into the text output.
+# Strip complete blocks first (including their content), then stray tags.
+_TOOL_BLOCK_RE = re.compile(
+    r'<(?:tool_call|function_calls|parameter)\b[^>]*>.*?</(?:tool_call|function_calls|parameter)>',
+    re.DOTALL | re.IGNORECASE,
+)
+_TOOL_TAG_RE = re.compile(
+    r'</?(?:tool_call|function_calls|function|parameter)\b[^>]*>',
+    re.IGNORECASE,
+)
+# Blank lines left behind after tag removal
+_MULTI_BLANK_RE = re.compile(r'\n{3,}')
+
+
+def _clean_response(text: str) -> str:
+    """Strip leaked tool-call XML fragments from the model's text output."""
+    text = _TOOL_BLOCK_RE.sub("", text)
+    text = _TOOL_TAG_RE.sub("", text)
+    text = _MULTI_BLANK_RE.sub("\n\n", text)
+    return text.strip() or "(no response)"
 
 
 class Brain:
@@ -147,6 +171,49 @@ class Brain:
                     "required": ["id"],
                 },
             ),
+            ToolDefinition(
+                name="manage_skills",
+                description=(
+                    "Install, uninstall, or list addon skills. "
+                    "Addon skills are saved to ~/agent-files/skills/ and persist across restarts. "
+                    "Use 'install' to add a new skill from SKILL.md + tool.py content. "
+                    "The new skill is immediately available after installation. "
+                    "Use 'uninstall' to remove an addon skill. Core skills cannot be removed."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["install", "uninstall", "list"],
+                            "description": "Operation to perform.",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Skill name (snake_case identifier). "
+                                "Required for install and uninstall."
+                            ),
+                        },
+                        "skill_md": {
+                            "type": "string",
+                            "description": (
+                                "Full SKILL.md content for the skill (required for install). "
+                                "Should describe what the skill does and how to use it."
+                            ),
+                        },
+                        "tool_py": {
+                            "type": "string",
+                            "description": (
+                                "Full tool.py Python source code (required for install). "
+                                "Must define an async or sync `run(**kwargs) -> str` function "
+                                "and optionally a PARAMETERS dict (JSON Schema)."
+                            ),
+                        },
+                    },
+                    "required": ["action"],
+                },
+            ),
         ]
 
     def _get_all_tools(self) -> list[ToolDefinition]:
@@ -230,6 +297,31 @@ class Brain:
             logger.info(f"Deleted job '{job_id}'")
             return f"✅ Job '{job_id}' deleted."
 
+        if tool_call.name == "manage_skills":
+            action = tool_call.arguments.get("action", "")
+            if action == "list":
+                return self.skills.get_skills_summary()
+            elif action == "install":
+                name = tool_call.arguments.get("name", "")
+                skill_md = tool_call.arguments.get("skill_md", "")
+                tool_py = tool_call.arguments.get("tool_py", "")
+                if not name:
+                    return "Error: 'name' is required for install."
+                if not tool_py:
+                    return "Error: 'tool_py' is required for install."
+                result = self.skills.install(name, skill_md, tool_py)
+                logger.info(f"manage_skills install '{name}': {result[:60]}")
+                return result
+            elif action == "uninstall":
+                name = tool_call.arguments.get("name", "")
+                if not name:
+                    return "Error: 'name' is required for uninstall."
+                result = self.skills.uninstall(name)
+                logger.info(f"manage_skills uninstall '{name}': {result[:60]}")
+                return result
+            else:
+                return f"Unknown manage_skills action '{action}'. Use: install, uninstall, list."
+
         if tool_call.name.startswith("skill_"):
             skill_name = tool_call.name[len("skill_"):]
             skill = self.skills.get_skill(skill_name)
@@ -265,10 +357,12 @@ class Brain:
             Message(role="user", content=user_message)
         ]
 
-        all_tools = self._get_all_tools()
-
         for iteration in range(MAX_ITERATIONS):
             logger.debug(f"ReAct iteration {iteration + 1}/{MAX_ITERATIONS}")
+
+            # Rebuild tool list each iteration so newly installed addon skills
+            # are immediately callable within the same conversation.
+            all_tools = self._get_all_tools()
 
             response: LLMResponse = await self.provider.complete(
                 messages=messages,
@@ -299,7 +393,7 @@ class Brain:
                 continue
 
             else:
-                final_text = response.content or "(no response)"
+                final_text = _clean_response(response.content or "")
                 messages.append(Message(role="assistant", content=final_text))
                 logger.info(
                     f"Brain finished in {iteration + 1} iteration(s). "

@@ -15,6 +15,7 @@ from pathlib import Path
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from memory.history import ConversationHistory
+from channels.telegram.formatting import md_to_html
 
 # Where incoming files are staged before the brain decides what to do with them
 _UPLOAD_DIR = Path.home() / "agent-files" / "uploads"
@@ -78,6 +79,12 @@ class TelegramBot:
         self.app.add_handler(
             MessageHandler(filters.Document.ALL, self._handle_document)
         )
+        self.app.add_handler(
+            MessageHandler(filters.VOICE, self._handle_voice)
+        )
+        self.app.add_handler(
+            MessageHandler(filters.AUDIO, self._handle_voice)
+        )
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -105,6 +112,18 @@ class TelegramBot:
         self._history.clear(str(user_id))
         await update.message.reply_text("🧹 Conversation cleared.", reply_markup=_MAIN_KEYBOARD)
 
+    async def _reply(self, update: Update, text: str, reply_markup=None) -> None:
+        """Send a reply with Telegram HTML formatting, splitting if needed."""
+        html_text = md_to_html(text)
+        if len(html_text) > 4096:
+            # Split on paragraph boundaries when possible
+            chunks = [html_text[i:i+4096] for i in range(0, len(html_text), 4096)]
+            for i, chunk in enumerate(chunks):
+                markup = reply_markup if i == len(chunks) - 1 else None
+                await update.message.reply_text(chunk, parse_mode="HTML", reply_markup=markup)
+        else:
+            await update.message.reply_text(html_text, parse_mode="HTML", reply_markup=reply_markup)
+
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if not self._is_allowed(user_id):
@@ -114,7 +133,8 @@ class TelegramBot:
         provider_name = self.brain.provider.model_name
         skills = self.brain.skills.all_skill_names()
         context_entries = len(self.brain.memory.parse_context_entries())
-        await update.message.reply_text(
+        await self._reply(
+            update,
             f"🤖 **Agent Status**\n"
             f"Model: `{provider_name}`\n"
             f"Conversation: {len(history)} messages\n"
@@ -170,19 +190,95 @@ class TelegramBot:
             )
             self._history.save(user_id, updated_history)
 
-            if len(response_text) > 4000:
-                chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
-                for i, chunk in enumerate(chunks):
-                    markup = _MAIN_KEYBOARD if i == len(chunks) - 1 else None
-                    await update.message.reply_text(chunk, reply_markup=markup)
-            else:
-                await update.message.reply_text(response_text, reply_markup=_MAIN_KEYBOARD)
+            await self._reply(update, response_text, reply_markup=_MAIN_KEYBOARD)
 
             for path, caption_f in self.brain.take_files():
                 await self._send_file(update, path, caption_f)
 
         except Exception as e:
             logger.exception("Error processing uploaded file")
+            await update.message.reply_text(f"⚠️ Something went wrong: {e}")
+
+    async def _handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handle an incoming voice note or audio file.
+
+        Downloads the audio, transcribes it with NVIDIA Parakeet, then feeds
+        the transcript to the brain exactly like a typed message.
+
+        If Parakeet is not installed the brain is notified about the audio file
+        instead so it can at least acknowledge the message.
+        """
+        user = update.effective_user
+        if not self._is_allowed(user.id):
+            await update.message.reply_text("⛔ Unauthorized.")
+            return
+
+        # Telegram Voice = recorded voice note (.ogg/Opus)
+        # Telegram Audio = music/audio file sent as audio
+        audio_obj = update.message.voice or update.message.audio
+        if not audio_obj:
+            return
+
+        if update.message.voice:
+            filename = f"voice_{audio_obj.file_unique_id}.ogg"
+        else:
+            filename = getattr(audio_obj, "file_name", None) or f"audio_{audio_obj.file_unique_id}.ogg"
+
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        save_path = _UPLOAD_DIR / filename
+
+        await update.message.chat.send_action("typing")
+
+        try:
+            tg_file = await audio_obj.get_file()
+            await tg_file.download_to_drive(str(save_path))
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Could not download audio: {e}")
+            return
+
+        logger.info(f"Audio received from {user.username or user.id}: {filename} → {save_path}")
+
+        # Transcribe with Parakeet
+        caption = update.message.caption or ""
+        transcript: str | None = None
+        try:
+            from channels.telegram.transcribe import transcribe
+            await update.message.chat.send_action("typing")
+            transcript = await transcribe(save_path)
+            logger.info(f"Transcribed ({filename}): {transcript[:120]}")
+        except RuntimeError as e:
+            logger.warning(f"Transcription unavailable: {e}")
+        except Exception as e:
+            logger.error(f"Transcription failed for {filename}: {e}")
+
+        if transcript:
+            user_message = transcript
+            if caption:
+                user_message = f"{transcript}\n\n[User note: {caption}]"
+        else:
+            user_message = (
+                f"[System: the user sent a voice/audio message saved to {save_path}. "
+                "Transcription is unavailable — nemo_toolkit may not be installed.]\n"
+                f"{caption or 'The user sent an audio message.'}"
+            )
+
+        user_id = str(user.id)
+        history = self._history.load(user_id)
+        try:
+            response_text, updated_history = await self.brain.think(
+                user_message=user_message,
+                conversation_history=history,
+            )
+            self._history.save(user_id, updated_history)
+
+            await self._reply(update, response_text, reply_markup=_MAIN_KEYBOARD)
+
+            for path, cap in self.brain.take_files():
+                await self._send_file(update, path, cap)
+
+        except Exception as e:
+            logger.exception("Error processing voice message")
             await update.message.reply_text(f"⚠️ Something went wrong: {e}")
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,13 +303,7 @@ class TelegramBot:
             )
             self._history.save(user_id, updated_history)
 
-            if len(response_text) > 4000:
-                chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
-                for i, chunk in enumerate(chunks):
-                    markup = _MAIN_KEYBOARD if i == len(chunks) - 1 else None
-                    await update.message.reply_text(chunk, reply_markup=markup)
-            else:
-                await update.message.reply_text(response_text, reply_markup=_MAIN_KEYBOARD)
+            await self._reply(update, response_text, reply_markup=_MAIN_KEYBOARD)
 
             # Send any files queued by the send_file tool
             for path, caption in self.brain.take_files():
@@ -261,9 +351,11 @@ class TelegramBot:
 
         for user_id in self._allowed_users:
             try:
-                # Split long messages
-                for i in range(0, max(1, len(text)), 4000):
-                    await self.app.bot.send_message(chat_id=user_id, text=text[i:i+4000])
+                html_text = md_to_html(text)
+                for i in range(0, max(1, len(html_text)), 4096):
+                    await self.app.bot.send_message(
+                        chat_id=user_id, text=html_text[i:i+4096], parse_mode="HTML"
+                    )
                 # Send any attached files
                 for path, caption in (files or []):
                     path = Path(path)

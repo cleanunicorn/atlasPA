@@ -64,6 +64,36 @@ The `browser` skill requires downloading Chromium once:
 uv run playwright install chromium
 ```
 
+## LLM Observability
+
+Every request to and response from the LLM provider is logged automatically to `logs/llm.jsonl` (one JSON object per line, appended at runtime).
+
+Each entry contains:
+- `ts` — UTC timestamp
+- `provider` / `model` — which provider and model was used
+- `request` — system prompt, messages, tools sent, max_tokens
+- `response` — content, tool calls, stop reason, token usage
+
+**Disable logging** by setting `LLM_LOG_FILE=off` in `config/.env`.
+
+**Change log location** by setting `LLM_LOG_FILE=/path/to/file.jsonl`.
+
+### Log Viewer
+
+A web UI for browsing logs — handles large files efficiently via a byte-offset index (O(1) random access, no full file load).
+
+```bash
+uv run python -m logviewer.server
+# → http://localhost:7331
+```
+
+Features: paginated entry list, per-entry conversation view (system prompt, user/assistant/tool messages, tool calls with formatted args), search, newest/oldest toggle, token usage display.
+
+Override port or log directory:
+```bash
+LOG_VIEWER_PORT=8080 LLM_LOG_DIR=/path/to/logs uv run python -m logviewer.server
+```
+
 ## Running tests
 
 ```bash

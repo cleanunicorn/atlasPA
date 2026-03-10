@@ -230,6 +230,9 @@ skills/**/__pycache__/
 skills/**/cache/
 skills/**/state/
 
+# LLM observability logs
+logs/
+
 # Heartbeat job state (Phase 4)
 heartbeat/jobs/state/
 

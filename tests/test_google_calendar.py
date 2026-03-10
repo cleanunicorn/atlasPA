@@ -167,6 +167,87 @@ async def test_list_events_single_account_no_prefix():
     assert "personal / " not in result
 
 
+# ── rsvp_filter / RSVP display ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_events_shows_rsvp_status():
+    from skills.google_calendar.tool import run
+
+    events = [{
+        "id": "ev1", "summary": "Team call",
+        "start": {"dateTime": "2026-03-16T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-16T09:30:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "accepted"}],
+    }]
+    svc = make_service(events=events)
+    with patch_services({"personal": svc}):
+        result = await run(action="list_events", account="personal")
+
+    assert "Team call" in result
+    assert "accepted" in result
+
+
+@pytest.mark.asyncio
+async def test_list_events_pending_rsvp_emoji():
+    from skills.google_calendar.tool import run
+
+    events = [{
+        "id": "ev1", "summary": "Board meeting",
+        "start": {"dateTime": "2026-03-16T10:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-16T11:00:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "needsAction"}],
+    }]
+    svc = make_service(events=events)
+    with patch_services({"personal": svc}):
+        result = await run(action="list_events", account="personal")
+
+    assert "📨" in result
+    assert "needsAction" in result
+
+
+@pytest.mark.asyncio
+async def test_list_events_rsvp_filter_needs_action():
+    from skills.google_calendar.tool import run
+
+    events = [
+        {
+            "id": "ev1", "summary": "Pending invite",
+            "start": {"dateTime": "2026-03-16T09:00:00+00:00"},
+            "end":   {"dateTime": "2026-03-16T09:30:00+00:00"},
+            "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "needsAction"}],
+        },
+        {
+            "id": "ev2", "summary": "Already accepted",
+            "start": {"dateTime": "2026-03-16T10:00:00+00:00"},
+            "end":   {"dateTime": "2026-03-16T11:00:00+00:00"},
+            "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "accepted"}],
+        },
+    ]
+    svc = make_service(events=events)
+    with patch_services({"personal": svc}):
+        result = await run(action="list_events", account="personal", rsvp_filter="needsAction")
+
+    assert "Pending invite" in result
+    assert "Already accepted" not in result
+
+
+@pytest.mark.asyncio
+async def test_list_events_rsvp_filter_no_matches():
+    from skills.google_calendar.tool import run
+
+    events = [{
+        "id": "ev1", "summary": "Regular event",
+        "start": {"dateTime": "2026-03-16T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-16T09:30:00+00:00"},
+        # no attendees → no RSVP status
+    }]
+    svc = make_service(events=events)
+    with patch_services({"personal": svc}):
+        result = await run(action="list_events", account="personal", rsvp_filter="needsAction")
+
+    assert "No events" in result
+
+
 # ── create_event ───────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -207,6 +288,130 @@ async def test_create_event_missing_fields():
         result = await run(action="create_event", account="personal", summary="No times")
 
     assert "Error" in result
+
+
+# ── rsvp_event ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_rsvp_event_accepted():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    svc.events().get().execute.return_value = {
+        "id": "evt1", "summary": "Team Standup",
+        "start": {"dateTime": "2026-03-15T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T09:30:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "needsAction"}],
+    }
+    svc.events().patch().execute.return_value = {
+        "id": "evt1", "summary": "Team Standup",
+        "start": {"dateTime": "2026-03-15T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T09:30:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "accepted"}],
+    }
+    with patch_services({"work": svc}):
+        result = await run(action="rsvp_event", account="work",
+                           event_id="evt1", response="accepted")
+
+    assert "✅" in result
+    assert "accepted" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_declined():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    svc.events().get().execute.return_value = {
+        "id": "evt1", "summary": "All Hands",
+        "start": {"dateTime": "2026-03-15T10:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T11:00:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "needsAction"}],
+    }
+    svc.events().patch().execute.return_value = {
+        "id": "evt1", "summary": "All Hands",
+        "start": {"dateTime": "2026-03-15T10:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T11:00:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "declined"}],
+    }
+    with patch_services({"work": svc}):
+        result = await run(action="rsvp_event", account="work",
+                           event_id="evt1", response="declined")
+
+    assert "❌" in result
+    assert "declined" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_missing_event_id():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    with patch_services({"personal": svc}):
+        result = await run(action="rsvp_event", account="personal", response="accepted")
+
+    assert "Error" in result
+    assert "event_id" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_missing_response():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    with patch_services({"personal": svc}):
+        result = await run(action="rsvp_event", account="personal", event_id="evt1")
+
+    assert "Error" in result
+    assert "response" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_invalid_response():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    svc.events().get().execute.return_value = {
+        "id": "evt1", "summary": "Meeting",
+        "start": {"dateTime": "2026-03-15T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T10:00:00+00:00"},
+        "attendees": [{"self": True, "email": "me@example.com", "responseStatus": "needsAction"}],
+    }
+    with patch_services({"personal": svc}):
+        result = await run(action="rsvp_event", account="personal",
+                           event_id="evt1", response="maybe")
+
+    assert "Error" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_no_attendee_self():
+    from skills.google_calendar.tool import run
+
+    svc = MagicMock()
+    svc.events().get().execute.return_value = {
+        "id": "evt1", "summary": "Personal reminder",
+        "start": {"dateTime": "2026-03-15T09:00:00+00:00"},
+        "end":   {"dateTime": "2026-03-15T10:00:00+00:00"},
+        "attendees": [],  # no self attendee
+    }
+    with patch_services({"personal": svc}):
+        result = await run(action="rsvp_event", account="personal",
+                           event_id="evt1", response="accepted")
+
+    assert "Error" in result
+
+
+@pytest.mark.asyncio
+async def test_rsvp_event_requires_account_when_multi():
+    from skills.google_calendar.tool import run
+
+    svc1, svc2 = MagicMock(), MagicMock()
+    with patch_services({"personal": svc1, "work": svc2}):
+        result = await run(action="rsvp_event", event_id="evt1", response="accepted")
+
+    assert "Error" in result
+    assert "account" in result.lower()
 
 
 # ── update / delete ────────────────────────────────────────────────────────────

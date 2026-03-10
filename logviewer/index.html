@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Log Viewer</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #171b26;
+    --bg3: #1e2333;
+    --border: #2a3050;
+    --text: #c9d1e0;
+    --muted: #6b7a99;
+    --accent: #5b8ef7;
+    --accent2: #7c5bf7;
+    --green: #3ecf8e;
+    --yellow: #f5c842;
+    --red: #f56565;
+    --tool: #e67e22;
+    --user-bg: #1a2540;
+    --assistant-bg: #1a2030;
+    --system-bg: #1e1a30;
+    --tool-bg: #211e14;
+    --toolres-bg: #14201e;
+    --radius: 8px;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+  /* Layout */
+  #app { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 48px 1fr; height: 100vh; }
+  #topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+  #sidebar { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; border-right: 1px solid var(--border); overflow: hidden; background: var(--bg2); }
+  #detail { grid-column: 2; grid-row: 2; overflow-y: auto; padding: 20px; }
+
+  /* Topbar */
+  #topbar h1 { font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: .5px; }
+  #topbar h1 span { color: var(--muted); font-weight: 400; }
+  #file-select { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
+  #search-input { flex: 1; background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: var(--radius); font-size: 13px; }
+  #search-input::placeholder { color: var(--muted); }
+  #search-input:focus, #file-select:focus { outline: none; border-color: var(--accent); }
+  #order-toggle { background: var(--bg3); border: 1px solid var(--border); color: var(--muted); padding: 4px 10px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+  #order-toggle:hover { color: var(--text); }
+  #stats { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+
+  /* Sidebar list */
+  #entry-list { flex: 1; overflow-y: auto; }
+  .entry-row { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s; }
+  .entry-row:hover { background: var(--bg3); }
+  .entry-row.active { background: #1a2745; border-left: 3px solid var(--accent); }
+  .entry-ts { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .entry-model { font-size: 12px; font-weight: 600; margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 500; }
+  .badge-stop { background: #1a2040; color: var(--accent); }
+  .badge-tool { background: #2a1f10; color: var(--tool); }
+  .badge-tokens { background: #1a2a1a; color: var(--green); }
+  .badge-msgs { background: #2a1a2a; color: #c08ef7; }
+
+  /* Pagination */
+  #pagination { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  .page-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .page-btn:hover { border-color: var(--accent); }
+  .page-btn:disabled { opacity: .4; cursor: default; }
+  #page-info { font-size: 12px; color: var(--muted); min-width: 80px; text-align: center; }
+
+  /* Detail panel */
+  #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted); gap: 8px; }
+  #detail-empty svg { opacity: .3; }
+  #detail-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; gap: 12px; }
+  #detail-header-left { display: flex; flex-direction: column; gap: 4px; }
+  #detail-title { font-size: 16px; font-weight: 600; }
+  #detail-subtitle { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  #detail-usage { display: flex; gap: 8px; flex-wrap: wrap; }
+  .usage-chip { font-size: 11px; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 2px 8px; color: var(--text); }
+
+  /* Messages */
+  .section-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; }
+  .message { border-radius: var(--radius); padding: 12px 14px; margin-bottom: 8px; }
+  .message-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .role-pill { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; }
+  .role-system   { background: #2a1f40; color: #a07ef7; }
+  .role-user     { background: #1a2a40; color: var(--accent); }
+  .role-assistant{ background: #1a2a1a; color: var(--green); }
+  .role-tool     { background: #2a1f0a; color: var(--tool); }
+  .role-toolres  { background: #0a2a20; color: #3ecf8e; }
+  .msg-system    { background: var(--system-bg); border: 1px solid #2a1f40; }
+  .msg-user      { background: var(--user-bg); border: 1px solid #1e2d50; }
+  .msg-assistant { background: var(--assistant-bg); border: 1px solid #1e2a1e; }
+  .msg-tool      { background: var(--tool-bg); border: 1px solid #2a1f0a; }
+  .msg-toolres   { background: var(--toolres-bg); border: 1px solid #0a2820; }
+  .msg-content { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+  .tool-call-id { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+
+  /* Tool calls block */
+  .tool-call-block { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 8px; }
+  .tool-call-name { font-size: 12px; font-weight: 700; color: var(--tool); margin-bottom: 4px; }
+  .tool-call-args { font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-wrap; }
+
+  /* Response section */
+  .response-box { background: var(--assistant-bg); border: 1px solid #1e2a1e; border-radius: var(--radius); padding: 12px 14px; }
+  .response-content { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; color: var(--text); }
+
+  /* Tools sent section */
+  .tools-grid { display: grid; gap: 6px; }
+  .tool-def { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+  .tool-def-name { font-size: 12px; font-weight: 700; color: var(--accent2); }
+  .tool-def-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* Loading */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* System prompt collapsible */
+  details { }
+  details summary { cursor: pointer; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: '▶ '; font-size: 10px; color: var(--muted); }
+  details[open] summary::before { content: '▼ '; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Topbar -->
+  <div id="topbar">
+    <h1>LLM Log Viewer <span>/ atlas</span></h1>
+    <select id="file-select"></select>
+    <input id="search-input" type="text" placeholder="Search entries…">
+    <button id="order-toggle" title="Toggle order">↕ Newest first</button>
+    <span id="stats"></span>
+  </div>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="entry-list"></div>
+    <div id="pagination">
+      <button class="page-btn" id="btn-first" title="First page">«</button>
+      <button class="page-btn" id="btn-prev" title="Previous page">‹</button>
+      <span id="page-info">–</span>
+      <button class="page-btn" id="btn-next" title="Next page">›</button>
+      <button class="page-btn" id="btn-last" title="Last page">»</button>
+    </div>
+  </div>
+
+  <!-- Detail -->
+  <div id="detail">
+    <div id="detail-empty">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M9 12h6M9 16h6M9 8h6M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+      </svg>
+      <p>Select an entry to inspect it</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+let state = { file: 'llm.jsonl', page: 1, limit: 100, search: '', order: 'desc', totalPages: 1, activeRow: null };
+let searchTimer = null;
+
+// ── Bootstrap ────────────────────────────────────────────────────────────────
+async function init() {
+  await loadFiles();
+  await loadList();
+  bindControls();
+}
+
+// ── File list ────────────────────────────────────────────────────────────────
+async function loadFiles() {
+  const r = await fetch(`${API}/files`);
+  const { files } = await r.json();
+  const sel = document.getElementById('file-select');
+  sel.innerHTML = '';
+  if (!files.length) { sel.innerHTML = '<option>No log files</option>'; return; }
+  files.forEach(f => {
+    const o = document.createElement('option');
+    o.value = f.name;
+    o.textContent = `${f.name}  (${f.count.toLocaleString()} entries)`;
+    sel.appendChild(o);
+  });
+  state.file = files[0].name;
+}
+
+// ── Entry list ────────────────────────────────────────────────────────────────
+async function loadList() {
+  const list = document.getElementById('entry-list');
+  list.innerHTML = '<div style="padding:16px;color:var(--muted)"><span class="spinner"></span> Loading…</div>';
+
+  const params = new URLSearchParams({
+    file: state.file,
+    page: state.page,
+    limit: state.limit,
+    search: state.search,
+    order: state.order,
+  });
+  const r = await fetch(`${API}/entries?${params}`);
+  const data = await r.json();
+
+  state.totalPages = data.pages;
+  document.getElementById('stats').textContent =
+    `${data.total.toLocaleString()} entries · page ${data.page}/${data.pages}`;
+
+  list.innerHTML = '';
+  if (!data.entries.length) {
+    list.innerHTML = '<div style="padding:16px;color:var(--muted)">No entries found.</div>';
+  }
+  data.entries.forEach(e => {
+    const div = document.createElement('div');
+    div.className = 'entry-row' + (state.activeRow === e.line ? ' active' : '');
+    div.dataset.line = e.line;
+
+    const ts = e.ts ? new Date(e.ts).toLocaleString() : '–';
+    const inTok = e.usage?.input_tokens ?? '?';
+    const outTok = e.usage?.output_tokens ?? '?';
+    const stop = e.stop_reason ?? '–';
+
+    div.innerHTML = `
+      <div class="entry-ts">${ts}</div>
+      <div class="entry-model">${e.model || e.provider || '–'}</div>
+      <div class="entry-meta">
+        <span class="badge badge-stop">${stop}</span>
+        ${e.n_tool_calls ? `<span class="badge badge-tool">⚙ ${e.n_tool_calls} tools</span>` : ''}
+        <span class="badge badge-tokens">↑${inTok} ↓${outTok}</span>
+        <span class="badge badge-msgs">${e.n_messages} msgs</span>
+      </div>`;
+
+    div.addEventListener('click', () => selectEntry(e.line, div));
+    list.appendChild(div);
+  });
+
+  updatePagination();
+}
+
+// ── Detail ────────────────────────────────────────────────────────────────────
+async function selectEntry(line, rowEl) {
+  document.querySelectorAll('.entry-row.active').forEach(el => el.classList.remove('active'));
+  rowEl.classList.add('active');
+  state.activeRow = line;
+
+  const detail = document.getElementById('detail');
+  detail.innerHTML = '<div style="padding:40px;color:var(--muted)"><span class="spinner"></span> Loading…</div>';
+
+  const r = await fetch(`${API}/entry/${line}?file=${encodeURIComponent(state.file)}`);
+  const entry = await r.json();
+  renderDetail(detail, entry);
+}
+
+function renderDetail(el, e) {
+  const req = e.request || {};
+  const res = e.response || {};
+  const ts = e.ts ? new Date(e.ts).toLocaleString() : '–';
+  const inTok = res.usage?.input_tokens ?? '?';
+  const outTok = res.usage?.output_tokens ?? '?';
+
+  let html = `
+  <div id="detail-header">
+    <div id="detail-header-left">
+      <div id="detail-title">${e.model || e.provider || '–'}</div>
+      <div id="detail-subtitle">${ts} · ${e.provider || ''}</div>
+    </div>
+    <div id="detail-usage">
+      <span class="usage-chip">↑ ${inTok} in</span>
+      <span class="usage-chip">↓ ${outTok} out</span>
+      <span class="usage-chip">${res.stop_reason || '–'}</span>
+      <span class="usage-chip">max ${req.max_tokens ?? '?'} tokens</span>
+    </div>
+  </div>`;
+
+  // System prompt
+  if (req.system) {
+    html += `<div class="section-title">System Prompt</div>
+    <div class="message msg-system">
+      <details><summary class="msg-content" style="font-size:12px;color:var(--muted)">${esc(req.system.slice(0,120))}${req.system.length>120?'…':''}</summary>
+      <div class="msg-content" style="margin-top:8px">${esc(req.system)}</div></details>
+    </div>`;
+  }
+
+  // Messages
+  if (req.messages && req.messages.length) {
+    html += `<div class="section-title">Messages (${req.messages.length})</div>`;
+    req.messages.forEach(msg => { html += renderMessage(msg); });
+  }
+
+  // Tools available
+  if (req.tools && req.tools.length) {
+    html += `<div class="section-title">Tools Available (${req.tools.length})</div>
+    <div class="tools-grid">`;
+    req.tools.forEach(t => {
+      html += `<div class="tool-def">
+        <div class="tool-def-name">${esc(t.name)}</div>
+        <div class="tool-def-desc">${esc(t.description || '')}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Response
+  html += `<div class="section-title">Response</div>`;
+  html += `<div class="response-box">`;
+
+  if (res.content) {
+    html += `<div class="response-content">${esc(res.content)}</div>`;
+  }
+
+  if (res.tool_calls && res.tool_calls.length) {
+    if (res.content) html += '<div style="height:10px"></div>';
+    res.tool_calls.forEach(tc => {
+      const args = typeof tc.arguments === 'object'
+        ? JSON.stringify(tc.arguments, null, 2)
+        : String(tc.arguments);
+      html += `<div class="tool-call-block">
+        <div class="tool-call-name">⚙ ${esc(tc.name)}</div>
+        <div class="tool-call-id">${esc(tc.id)}</div>
+        <div class="tool-call-args">${esc(args)}</div>
+      </div>`;
+    });
+  }
+
+  if (!res.content && (!res.tool_calls || !res.tool_calls.length)) {
+    html += `<div style="color:var(--muted);font-size:12px">(empty response)</div>`;
+  }
+
+  html += `</div>`;
+  el.innerHTML = html;
+}
+
+function renderMessage(msg) {
+  const role = msg.role;
+  let cssRole, cssMsg, label;
+  if (role === 'system')    { cssRole = 'role-system';    cssMsg = 'msg-system';    label = 'System'; }
+  else if (role === 'user') { cssRole = 'role-user';      cssMsg = 'msg-user';      label = 'User'; }
+  else if (role === 'tool') { cssRole = 'role-toolres';   cssMsg = 'msg-toolres';   label = 'Tool Result'; }
+  else                      { cssRole = 'role-assistant'; cssMsg = 'msg-assistant'; label = 'Assistant'; }
+
+  let inner = '';
+
+  // Tool result message
+  if (role === 'tool') {
+    inner = `<div class="tool-call-id">${esc(msg.tool_call_id || '')}</div>
+    <div class="msg-content">${esc(msg.content || '')}</div>`;
+  }
+  // Assistant with tool calls
+  else if (msg.tool_calls && msg.tool_calls.length) {
+    if (msg.content) inner += `<div class="msg-content">${esc(msg.content)}</div>`;
+    msg.tool_calls.forEach(tc => {
+      const args = typeof tc.arguments === 'object'
+        ? JSON.stringify(tc.arguments, null, 2)
+        : String(tc.arguments || '');
+      inner += `<div class="tool-call-block">
+        <div class="tool-call-name">⚙ ${esc(tc.name)}</div>
+        <div class="tool-call-id">${esc(tc.id)}</div>
+        <div class="tool-call-args">${esc(args)}</div>
+      </div>`;
+    });
+  }
+  // Plain text message
+  else {
+    inner = `<div class="msg-content">${esc(msg.content || '')}</div>`;
+  }
+
+  return `<div class="message ${cssMsg}">
+    <div class="message-header"><span class="role-pill ${cssRole}">${label}</span></div>
+    ${inner}
+  </div>`;
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── Pagination ────────────────────────────────────────────────────────────────
+function updatePagination() {
+  document.getElementById('page-info').textContent = `${state.page} / ${state.totalPages}`;
+  document.getElementById('btn-first').disabled = state.page <= 1;
+  document.getElementById('btn-prev').disabled  = state.page <= 1;
+  document.getElementById('btn-next').disabled  = state.page >= state.totalPages;
+  document.getElementById('btn-last').disabled  = state.page >= state.totalPages;
+}
+
+function goPage(p) {
+  state.page = Math.max(1, Math.min(state.totalPages, p));
+  loadList();
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+function bindControls() {
+  document.getElementById('file-select').addEventListener('change', e => {
+    state.file = e.target.value; state.page = 1; loadList();
+  });
+
+  document.getElementById('search-input').addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.search = e.target.value; state.page = 1; loadList();
+    }, 350);
+  });
+
+  const orderBtn = document.getElementById('order-toggle');
+  orderBtn.addEventListener('click', () => {
+    state.order = state.order === 'desc' ? 'asc' : 'desc';
+    orderBtn.textContent = state.order === 'desc' ? '↕ Newest first' : '↕ Oldest first';
+    state.page = 1; loadList();
+  });
+
+  document.getElementById('btn-first').addEventListener('click', () => goPage(1));
+  document.getElementById('btn-prev').addEventListener('click',  () => goPage(state.page - 1));
+  document.getElementById('btn-next').addEventListener('click',  () => goPage(state.page + 1));
+  document.getElementById('btn-last').addEventListener('click',  () => goPage(state.totalPages));
+}
+
+init();
+</script>
+</body>
+</html>
