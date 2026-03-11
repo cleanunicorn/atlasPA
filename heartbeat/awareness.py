@@ -142,7 +142,7 @@ class Awareness:
             logger.exception(f"Awareness LLM call failed: {e}")
             return
 
-        if response.strip().startswith(NO_ACTION_SENTINEL):
+        if NO_ACTION_SENTINEL in response:
             logger.debug("Awareness: NO_ACTION")
             _append_log(triggered=False, summary="no action")
             return
