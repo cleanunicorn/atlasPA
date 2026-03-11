@@ -18,6 +18,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from memory.retriever import ContextEntry, select_relevant
 
@@ -33,6 +34,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self.soul_path = MEMORY_DIR / "soul.md"
         self.context_path = MEMORY_DIR / "context.md"
+        self.location_path = MEMORY_DIR / "location.md"
         self._ensure_files()
 
     def _ensure_files(self) -> None:
@@ -118,7 +120,12 @@ class MemoryStore:
         Append a new note to context.md with a timestamp header.
         Called by the Brain's `remember` tool.
         """
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        tz_name = os.getenv("AGENT_TIMEZONE", "").strip()
+        try:
+            tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("localtime")
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
         current = self.context_path.read_text(encoding="utf-8")
         current = current.replace(
             "_Nothing stored yet. This file grows as you learn about the user._\n", ""
@@ -127,6 +134,29 @@ class MemoryStore:
             current.rstrip() + f"\n\n## {timestamp}\n{note}\n",
             encoding="utf-8",
         )
+
+    def set_current_location(self, location: str, timezone: str) -> None:
+        """
+        Persist the user's current location and timezone override.
+        Pass empty strings to clear (reset to home).
+        """
+        if location and timezone:
+            self.location_path.write_text(
+                f"{location}\t{timezone}\n", encoding="utf-8"
+            )
+        elif self.location_path.exists():
+            self.location_path.unlink()
+
+    def get_current_location(self) -> tuple[str, str] | None:
+        """
+        Return (location, timezone) if a travel override is active, else None.
+        """
+        if not self.location_path.exists():
+            return None
+        parts = self.location_path.read_text(encoding="utf-8").strip().split("\t", 1)
+        if len(parts) == 2 and parts[1]:
+            return parts[0], parts[1]
+        return None
 
     def forget_entry(self, note: str) -> str:
         """
@@ -209,8 +239,23 @@ class MemoryStore:
                             Empty string → inject all entries (up to cap).
         """
         soul = self.load_soul()
-        tz = os.getenv("AGENT_TIMEZONE", "UTC")
-        now = datetime.now().strftime("%A, %Y-%m-%d %H:%M")
+
+        # Timezone priority: travel override > AGENT_TIMEZONE env > machine local
+        current_loc = self.get_current_location()
+        if current_loc:
+            loc_label, tz_name = current_loc
+        else:
+            loc_label = None
+            tz_name = os.getenv("AGENT_TIMEZONE", "").strip()
+        try:
+            tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("localtime")
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
+            tz_name = "UTC"
+        if not tz_name:
+            tz_name = datetime.now(tz).strftime("%Z")
+        now = datetime.now(tz).strftime("%A, %Y-%m-%d %H:%M")
+        location_note = f" — currently in {loc_label}" if loc_label else ""
 
         # Build the context section
         entries = self.parse_context_entries()
@@ -241,7 +286,7 @@ class MemoryStore:
 
         parts = [
             soul,
-            f"\n---\n**Current time:** {now} ({tz})\n",
+            f"\n---\n**Current time:** {now} ({tz_name}){location_note}\n",
             f"\n---\n# User Context\n\n{context_text}",
         ]
 
