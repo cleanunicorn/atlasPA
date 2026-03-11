@@ -9,13 +9,18 @@ Security:
     Set this in your .env to prevent others from using your agent.
 """
 
+import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from memory.history import ConversationHistory
 from channels.telegram.formatting import md_to_html
+
+# Minimum seconds between Telegram message edits (rate limit: ~20 edits/min/chat)
+_STREAM_EDIT_INTERVAL = 0.6
 
 # Where incoming files are staged before the brain decides what to do with them
 _UPLOAD_DIR = Path.home() / "agent-files" / "uploads"
@@ -292,18 +297,11 @@ class TelegramBot:
 
         logger.info(f"Message from {user.username or user.id}: {user_text[:100]}")
 
-        await update.message.chat.send_action("typing")
-
         history = self._history.load(user_id)
 
         try:
-            response_text, updated_history = await self.brain.think(
-                user_message=user_text,
-                conversation_history=history,
-            )
+            response_text, updated_history = await self._stream_think(update, user_text, history)
             self._history.save(user_id, updated_history)
-
-            await self._reply(update, response_text, reply_markup=_MAIN_KEYBOARD)
 
             # Send any files queued by the send_file tool
             for path, caption in self.brain.take_files():
@@ -314,6 +312,55 @@ class TelegramBot:
             await update.message.reply_text(
                 f"⚠️ Something went wrong: {e}\n\nPlease try again."
             )
+
+    async def _stream_think(
+        self,
+        update: Update,
+        user_message: str,
+        history: list,
+    ) -> tuple[str, list]:
+        """
+        Call brain.think() with streaming and edit the reply message in real-time.
+
+        Sends a placeholder "…" message immediately, then edits it as tokens
+        arrive (throttled to _STREAM_EDIT_INTERVAL seconds between edits).
+        The final edit applies proper HTML formatting.
+
+        Returns (response_text, updated_history).
+        """
+        placeholder = await update.message.reply_text("…")
+
+        chunks: list[str] = []
+        last_edit_at: float = 0.0
+
+        async def on_token(chunk: str) -> None:
+            nonlocal last_edit_at
+            chunks.append(chunk)
+            now = time.monotonic()
+            if now - last_edit_at >= _STREAM_EDIT_INTERVAL:
+                partial = "".join(chunks)
+                try:
+                    await placeholder.edit_text(partial)
+                    last_edit_at = now
+                except Exception:
+                    pass  # Ignore edit failures (unchanged text, network hiccup, etc.)
+
+        response_text, updated_history = await self.brain.think(
+            user_message=user_message,
+            conversation_history=history,
+            on_token=on_token,
+        )
+
+        # Final edit: apply HTML formatting and attach keyboard
+        final_html = md_to_html(response_text)
+        try:
+            await placeholder.edit_text(final_html, parse_mode="HTML", reply_markup=_MAIN_KEYBOARD)
+        except Exception:
+            # If edit fails (e.g. message too long), fall back to a fresh reply
+            await placeholder.delete()
+            await self._reply(update, response_text, reply_markup=_MAIN_KEYBOARD)
+
+        return response_text, updated_history
 
     _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 

@@ -72,7 +72,7 @@ async def test_parallel_tools_both_executed(brain):
 
     brain._execute_tool = slow_tool
 
-    brain.provider.complete = AsyncMock(side_effect=[
+    brain.provider.stream = AsyncMock(side_effect=[
         _make_tool_response("skill_a", "skill_b"),
         _make_text_response("done"),
     ])
@@ -90,7 +90,7 @@ async def test_tool_exception_captured_as_error_message(brain):
 
     brain._execute_tool = boom
 
-    brain.provider.complete = AsyncMock(side_effect=[
+    brain.provider.stream = AsyncMock(side_effect=[
         _make_tool_response("bad_tool"),
         _make_text_response("handled"),
     ])
@@ -106,7 +106,7 @@ async def test_tool_exception_captured_as_error_message(brain):
 @pytest.mark.asyncio
 async def test_ask_user_returns_question_immediately(brain):
     """When ask_user is called, the loop stops and returns the question."""
-    brain.provider.complete = AsyncMock(return_value=LLMResponse(
+    brain.provider.stream = AsyncMock(return_value=LLMResponse(
         content="",
         tool_calls=[ToolCall(id="q1", name="ask_user", arguments={"question": "Which project?"})],
         stop_reason="tool_use",
@@ -132,7 +132,7 @@ async def test_ask_user_alongside_other_tools(brain):
 
     brain._execute_tool = tracking
 
-    brain.provider.complete = AsyncMock(return_value=LLMResponse(
+    brain.provider.stream = AsyncMock(return_value=LLMResponse(
         content="",
         tool_calls=[
             ToolCall(id="r1", name="remember", arguments={"note": "x"}),
@@ -152,7 +152,7 @@ async def test_ask_user_alongside_other_tools(brain):
 @pytest.mark.asyncio
 async def test_create_plan_stores_plan(brain):
     """create_plan saves the plan to brain._current_plan."""
-    brain.provider.complete = AsyncMock(side_effect=[
+    brain.provider.stream = AsyncMock(side_effect=[
         LLMResponse(
             content="",
             tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
@@ -174,7 +174,7 @@ async def test_create_plan_stores_plan(brain):
 @pytest.mark.asyncio
 async def test_create_plan_result_included_in_tool_messages(brain):
     """The plan text is returned as the tool result so the LLM sees it."""
-    brain.provider.complete = AsyncMock(side_effect=[
+    brain.provider.stream = AsyncMock(side_effect=[
         LLMResponse(
             content="",
             tool_calls=[ToolCall(id="p1", name="create_plan", arguments={

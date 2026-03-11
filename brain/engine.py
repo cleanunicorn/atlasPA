@@ -20,6 +20,7 @@ Phase 6 additions:
 import asyncio
 import logging
 import re
+from collections.abc import Callable, Awaitable
 from pathlib import Path
 from providers.base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
 from memory.store import MemoryStore
@@ -517,6 +518,7 @@ class Brain:
         self,
         user_message: str,
         conversation_history: list[Message],
+        on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, list[Message]]:
         """
         Run the ReAct loop for a single user message.
@@ -524,6 +526,9 @@ class Brain:
         Args:
             user_message:           The user's new message.
             conversation_history:   Previous messages in this conversation.
+            on_token:               Optional async callback called with each text
+                                    token of the final response as it streams in.
+                                    Only fires on the last (non-tool-call) iteration.
 
         Returns:
             (final_response_text, updated_history)
@@ -546,10 +551,14 @@ class Brain:
             # are immediately callable within the same conversation.
             all_tools = self._get_all_tools()
 
-            response: LLMResponse = await self.provider.complete(
+            # Use streaming on every call; on_token is only invoked when the
+            # response is final text (no tool calls), so it's a no-op for
+            # tool-use iterations.
+            response: LLMResponse = await self.provider.stream(
                 messages=messages,
                 tools=all_tools,
                 system=system,
+                on_token=on_token,
             )
 
             if response.tool_calls:

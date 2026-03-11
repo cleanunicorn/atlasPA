@@ -6,6 +6,7 @@ Every provider must implement `complete()` — that's the only contract.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Callable, Awaitable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,6 +78,29 @@ class BaseLLMProvider(ABC):
             LLMResponse with content and/or tool_calls.
         """
         ...
+
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        on_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        """
+        Like complete(), but calls *on_token* for each text token as it arrives.
+
+        Default implementation: calls complete() then fires on_token once with
+        the full content.  Override for true incremental streaming.
+
+        Args:
+            on_token: Async callback receiving each text chunk.
+                      Not called when the response is a tool call.
+        """
+        response = await self.complete(messages, tools, system, max_tokens)
+        if on_token and response.content and not response.tool_calls:
+            await on_token(response.content)
+        return response
 
     @property
     @abstractmethod

@@ -6,6 +6,7 @@ LLM provider for OpenAI's GPT models (and compatible APIs).
 
 import json
 import os
+from collections.abc import Callable, Awaitable
 import openai
 from .base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
 
@@ -32,46 +33,8 @@ class OpenAIProvider(BaseLLMProvider):
         json_mode: bool = False,
     ) -> LLMResponse:
         """Send messages to OpenAI and return a unified LLMResponse."""
-
-        openai_messages = []
-
-        # OpenAI injects system as a message with role "system"
-        if system:
-            openai_messages.append({"role": "system", "content": system})
-
-        for msg in messages:
-            if msg.role == "tool":
-                # Tool result message
-                openai_messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.tool_call_id,
-                    "content": msg.content,
-                })
-            elif msg.tool_calls:
-                # Assistant message that called tools
-                openai_messages.append({
-                    "role": "assistant",
-                    "content": msg.content or None,
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": json.dumps(tc["arguments"]),
-                            },
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                })
-            else:
-                openai_messages.append({"role": msg.role, "content": msg.content})
-
-        kwargs = dict(
-            model=self._model,
-            max_tokens=max_tokens,
-            messages=openai_messages,
-        )
+        openai_messages = self._build_messages(messages, system)
+        kwargs = dict(model=self._model, max_tokens=max_tokens, messages=openai_messages)
 
         if tools:
             kwargs["tools"] = [
@@ -125,3 +88,90 @@ class OpenAIProvider(BaseLLMProvider):
                 "output_tokens": response.usage.completion_tokens,
             },
         )
+
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        on_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        """Stream tokens via on_token callback; return full LLMResponse when done."""
+        openai_messages = self._build_messages(messages, system)
+
+        kwargs = dict(model=self._model, max_tokens=max_tokens, messages=openai_messages, stream=True)
+        if tools:
+            kwargs["tools"] = [
+                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+                for t in tools
+            ]
+            kwargs["tool_choice"] = "auto"
+
+        content_parts: list[str] = []
+        # tool-call accumulator: index → {id, name, args_str}
+        tc_acc: dict[int, dict] = {}
+        finish_reason: str = "stop"
+
+        stream = await self.client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            fr = chunk.choices[0].finish_reason
+            if fr:
+                finish_reason = fr
+
+            if delta.content:
+                content_parts.append(delta.content)
+                if on_token and not delta.tool_calls:
+                    await on_token(delta.content)
+
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tc_acc:
+                        tc_acc[idx] = {"id": "", "name": "", "args": ""}
+                    if tc_delta.id:
+                        tc_acc[idx]["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tc_acc[idx]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tc_acc[idx]["args"] += tc_delta.function.arguments
+
+        tool_calls: list[ToolCall] = []
+        for tc in sorted(tc_acc.values(), key=lambda x: list(tc_acc.values()).index(x)):
+            try:
+                arguments = json.loads(tc["args"]) if tc["args"] else {}
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], arguments=arguments))
+
+        stop_reason_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
+        return LLMResponse(
+            content="".join(content_parts) or None,
+            tool_calls=tool_calls,
+            stop_reason=stop_reason_map.get(finish_reason, "end_turn"),
+        )
+
+    def _build_messages(self, messages: list[Message], system: str | None) -> list[dict]:
+        """Convert unified Messages to OpenAI format."""
+        result = []
+        if system:
+            result.append({"role": "system", "content": system})
+        for msg in messages:
+            if msg.role == "tool":
+                result.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content})
+            elif msg.tool_calls:
+                result.append({
+                    "role": "assistant",
+                    "content": msg.content or None,
+                    "tool_calls": [
+                        {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}}
+                        for tc in msg.tool_calls
+                    ],
+                })
+            else:
+                result.append({"role": msg.role, "content": msg.content})
+        return result

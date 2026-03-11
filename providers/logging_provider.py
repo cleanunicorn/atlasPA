@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import asdict
 
+from collections.abc import Callable, Awaitable
 from .base import BaseLLMProvider, Message, ToolDefinition, LLMResponse
 
 
@@ -82,4 +83,41 @@ class LoggingProvider(BaseLLMProvider):
             with self._log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+        return response
+
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        on_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        """Stream via inner provider; log the completed response afterward."""
+        ts = datetime.now(timezone.utc).isoformat()
+        response = await self._inner.stream(messages, tools, system, max_tokens, on_token)
+        entry = {
+            "ts": ts,
+            "provider": type(self._inner).__name__,
+            "model": self._inner.model_name,
+            "request": {
+                "system": system,
+                "max_tokens": max_tokens,
+                "messages": [_message_to_dict(m) for m in messages],
+                "tools": [_tool_def_to_dict(t) for t in tools] if tools else [],
+                "streamed": True,
+            },
+            "response": {
+                "content": response.content,
+                "stop_reason": response.stop_reason,
+                "usage": response.usage,
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in response.tool_calls
+                ],
+            },
+        }
+        async with self._lock:
+            with self._log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         return response
