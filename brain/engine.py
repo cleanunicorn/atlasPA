@@ -516,7 +516,7 @@ class Brain:
 
     async def think(
         self,
-        user_message: str,
+        user_message: str | list,
         conversation_history: list[Message],
         on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, list[Message]]:
@@ -524,7 +524,8 @@ class Brain:
         Run the ReAct loop for a single user message.
 
         Args:
-            user_message:           The user's new message.
+            user_message:           The user's new message. May be a plain string
+                                    or a list of content blocks (text + images).
             conversation_history:   Previous messages in this conversation.
             on_token:               Optional async callback called with each text
                                     token of the final response as it streams in.
@@ -536,9 +537,17 @@ class Brain:
         self._pending_files = []   # Clear any leftover files from previous turn
         self._current_plan = None  # Reset plan each conversation turn
 
+        # Extract plain text for relevance-based memory filtering
+        if isinstance(user_message, list):
+            query_text = " ".join(
+                b.get("text", "") for b in user_message if b.get("type") == "text"
+            )
+        else:
+            query_text = user_message
+
         # Build system prompt — pass query for relevance-filtered context injection
         skills_summary = self.skills.get_skills_summary()
-        system = self.memory.build_system_prompt(skills_summary, query=user_message)
+        system = self.memory.build_system_prompt(skills_summary, query=query_text)
 
         messages = list(conversation_history) + [
             Message(role="user", content=user_message)

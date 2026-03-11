@@ -172,6 +172,20 @@ class OpenAIProvider(BaseLLMProvider):
                         for tc in msg.tool_calls
                     ],
                 })
+            elif isinstance(msg.content, list):
+                # Multimodal content (text + images)
+                openai_content = []
+                for block in msg.content:
+                    if block.get("type") == "image":
+                        openai_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{block['media_type']};base64,{block['data']}",
+                            },
+                        })
+                    else:
+                        openai_content.append({"type": "text", "text": block.get("text", "")})
+                result.append({"role": msg.role, "content": openai_content})
             else:
                 result.append({"role": msg.role, "content": msg.content})
         return result

@@ -7,14 +7,17 @@ Usage:
     python gateway.py --cli
 
 Commands:
-    /clear   — Reset conversation history
-    /status  — Show agent status
-    /quit    — Exit the agent
+    /clear          — Reset conversation history
+    /status         — Show agent status
+    /image <path>   — Send an image file to the agent
+    /quit           — Exit the agent
 """
 
 import asyncio
+import base64
 import logging
 import os
+from pathlib import Path
 from memory.history import ConversationHistory
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,7 @@ class CLIBot:
         print(f"\n{'=' * 50}")
         print(f"  {agent_name} — Personal AI Agent (CLI Mode){resume_note}")
         print(f"{'=' * 50}")
-        print(f"  Commands: /clear, /status, /quit")
+        print(f"  Commands: /clear, /status, /image <path>, /quit")
         print(f"{'=' * 50}\n")
 
         loop = asyncio.get_event_loop()
@@ -81,6 +84,21 @@ class CLIBot:
                 history = self._history_store.load(CLI_USER_ID)
                 self._print_status(len(history))
                 continue
+            elif user_input.lower().startswith("/image "):
+                image_path = Path(user_input[7:].strip()).expanduser()
+                if not image_path.exists():
+                    print(f"⚠️  File not found: {image_path}\n")
+                    continue
+                suffix = image_path.suffix.lower()
+                media_type_map = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".png": "image/png", ".gif": "image/gif",
+                    ".webp": "image/webp",
+                }
+                media_type = media_type_map.get(suffix, "image/jpeg")
+                img_b64 = base64.b64encode(image_path.read_bytes()).decode()
+                user_input = [{"type": "image", "media_type": media_type, "data": img_b64}]
+                print(f"📸 Image loaded: {image_path.name}\n")
 
             print()
             history = self._history_store.load(CLI_USER_ID)

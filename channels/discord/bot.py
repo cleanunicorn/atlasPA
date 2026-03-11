@@ -21,10 +21,12 @@ Required .env:
     DISCORD_ALLOWED_USERS=123456789,987654321  (optional)
 """
 
+import base64
 import logging
 import os
 from pathlib import Path
 
+import aiohttp
 import discord
 from discord import app_commands
 from memory.history import ConversationHistory
@@ -117,17 +119,45 @@ class DiscordBot:
                 content = content.replace(f"<@{self._client.user.id}>", "").strip()
                 content = content.replace(f"<@!{self._client.user.id}>", "").strip()
 
-            if not content:
-                return
-
             user_id = self._user_id_str(message.author)
-            logger.info(f"Discord message from {message.author}: {content[:100]}")
+
+            # Build multimodal content if image attachments are present
+            image_attachments = [
+                a for a in message.attachments
+                if a.content_type and a.content_type.startswith("image/")
+            ]
+            if image_attachments:
+                user_content: str | list = []
+                if content:
+                    user_content.append({"type": "text", "text": content})
+                async with aiohttp.ClientSession() as session:
+                    for att in image_attachments:
+                        try:
+                            async with session.get(att.url) as resp:
+                                img_bytes = await resp.read()
+                            media_type = att.content_type.split(";")[0]
+                            img_b64 = base64.b64encode(img_bytes).decode()
+                            user_content.append({
+                                "type": "image",
+                                "media_type": media_type,
+                                "data": img_b64,
+                            })
+                        except Exception as e:
+                            logger.warning(f"Could not download Discord attachment: {e}")
+                if not user_content:
+                    return
+            else:
+                if not content:
+                    return
+                user_content = content
+
+            logger.info(f"Discord message from {message.author}: {str(content)[:100]}")
 
             async with message.channel.typing():
                 history = self._history.load(user_id)
                 try:
                     response, updated_history = await self.brain.think(
-                        user_message=content,
+                        user_message=user_content,
                         conversation_history=history,
                     )
                     self._history.save(user_id, updated_history)

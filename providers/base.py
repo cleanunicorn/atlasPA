@@ -15,7 +15,7 @@ from typing import Any
 class Message:
     """A single message in a conversation."""
     role: str          # "system" | "user" | "assistant" | "tool"
-    content: str
+    content: str | list  # str for text; list of blocks for multimodal (text + images)
     tool_call_id: str | None = None   # for tool result messages
     tool_calls: list[dict] | None = None  # for assistant tool call messages
 

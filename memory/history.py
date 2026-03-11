@@ -59,6 +59,28 @@ class ConversationHistory:
             logger.warning(f"Could not load history for {user_id}: {e} — starting fresh")
             return []
 
+    @staticmethod
+    def _strip_images(messages: list[Message]) -> list[Message]:
+        """Replace base64 image data with a placeholder to keep history files small."""
+        result = []
+        for msg in messages:
+            if isinstance(msg.content, list):
+                stripped = []
+                for block in msg.content:
+                    if block.get("type") == "image":
+                        stripped.append({"type": "text", "text": "[image attached]"})
+                    else:
+                        stripped.append(block)
+                result.append(Message(
+                    role=msg.role,
+                    content=stripped,
+                    tool_call_id=msg.tool_call_id,
+                    tool_calls=msg.tool_calls,
+                ))
+            else:
+                result.append(msg)
+        return result
+
     def save(self, user_id: str, messages: list[Message]) -> None:
         """
         Persist conversation history for a user.
@@ -68,6 +90,7 @@ class ConversationHistory:
         if len(messages) > MAX_MESSAGES:
             messages = messages[-MAX_MESSAGES:]
 
+        messages = self._strip_images(messages)
         path = self._path(user_id)
         payload = json.dumps([asdict(m) for m in messages], indent=2, ensure_ascii=False)
 

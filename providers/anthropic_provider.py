@@ -54,6 +54,22 @@ class AnthropicProvider(BaseLLMProvider):
                         "input": tc["arguments"],
                     })
                 anthropic_messages.append({"role": "assistant", "content": content})
+            elif isinstance(msg.content, list):
+                # Multimodal content (text + images)
+                anthropic_content = []
+                for block in msg.content:
+                    if block.get("type") == "image":
+                        anthropic_content.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": block["media_type"],
+                                "data": block["data"],
+                            },
+                        })
+                    else:
+                        anthropic_content.append({"type": "text", "text": block.get("text", "")})
+                anthropic_messages.append({"role": msg.role, "content": anthropic_content})
             else:
                 anthropic_messages.append({"role": msg.role, "content": msg.content})
 

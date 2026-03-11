@@ -10,6 +10,7 @@ Security:
 """
 
 import asyncio
+import base64
 import logging
 import os
 import time
@@ -89,6 +90,9 @@ class TelegramBot:
         )
         self.app.add_handler(
             MessageHandler(filters.AUDIO, self._handle_voice)
+        )
+        self.app.add_handler(
+            MessageHandler(filters.PHOTO, self._handle_photo)
         )
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -286,6 +290,53 @@ class TelegramBot:
             logger.exception("Error processing voice message")
             await update.message.reply_text(f"⚠️ Something went wrong: {e}")
 
+    async def _handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handle an incoming photo from the user.
+
+        Downloads the highest-resolution version, base64-encodes it, and
+        builds a multimodal content list so the vision-capable LLM can see it.
+        """
+        user = update.effective_user
+        if not self._is_allowed(user.id):
+            await update.message.reply_text("⛔ Unauthorized.")
+            return
+
+        # Telegram sends multiple resolutions; take the largest
+        photo = update.message.photo[-1]
+        caption = update.message.caption or ""
+
+        await update.message.chat.send_action("typing")
+        try:
+            tg_file = await photo.get_file()
+            image_bytes = bytes(await tg_file.download_as_bytearray())
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Could not download image: {e}")
+            return
+
+        image_data = base64.b64encode(image_bytes).decode()
+
+        # Build multimodal content: optional text caption + image block
+        content: list = []
+        if caption:
+            content.append({"type": "text", "text": caption})
+        content.append({"type": "image", "media_type": "image/jpeg", "data": image_data})
+
+        user_id = str(user.id)
+        history = self._history.load(user_id)
+        try:
+            response_text, updated_history = await self._stream_think(
+                update, content, history
+            )
+            self._history.save(user_id, updated_history)
+
+            for path, cap in self.brain.take_files():
+                await self._send_file(update, path, cap)
+
+        except Exception as e:
+            logger.exception("Error processing photo")
+            await update.message.reply_text(f"⚠️ Something went wrong: {e}")
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self._is_allowed(user.id):
@@ -316,7 +367,7 @@ class TelegramBot:
     async def _stream_think(
         self,
         update: Update,
-        user_message: str,
+        user_message: str | list,
         history: list,
     ) -> tuple[str, list]:
         """
