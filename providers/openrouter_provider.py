@@ -33,6 +33,7 @@ class OpenRouterProvider(BaseLLMProvider):
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
         max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> LLMResponse:
 
         openai_messages = []
@@ -85,6 +86,9 @@ class OpenRouterProvider(BaseLLMProvider):
                 for t in tools
             ]
             kwargs["tool_choice"] = "auto"
+
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
 
         response = await self.client.chat.completions.create(**kwargs)
         choice = response.choices[0]
