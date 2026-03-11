@@ -17,6 +17,8 @@ import os
 import shutil
 import signal
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,6 +41,70 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+# Set to True by the file watcher when a restart is needed after clean shutdown
+_restart_requested = False
+
+
+# ── File watcher (watch mode) ─────────────────────────────────────────────────
+
+class _FileWatcher(threading.Thread):
+    """
+    Background thread that polls .py and .env files for changes.
+    On first change detected, sets _restart_requested and sends SIGTERM to
+    the main process so the asyncio loop shuts down cleanly before re-exec.
+    """
+
+    # Directories to ignore when scanning for .py files
+    _SKIP = {"__pycache__", ".venv", ".git", ".mypy_cache", "node_modules"}
+    # Poll every N seconds
+    _INTERVAL = 1.0
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(daemon=True, name="atlas-filewatcher")
+        self._root = root
+        self._stop_event = threading.Event()
+        self._baseline = self._snapshot()
+
+    def _snapshot(self) -> dict[str, float]:
+        """Return a dict of {abs_path: mtime} for all watched files."""
+        result: dict[str, float] = {}
+        for pattern in ("**/*.py", "config/.env"):
+            for p in self._root.glob(pattern):
+                parts = p.relative_to(self._root).parts
+                if any(d in self._SKIP for d in parts):
+                    continue
+                try:
+                    result[str(p)] = p.stat().st_mtime
+                except OSError:
+                    pass
+        return result
+
+    def run(self) -> None:
+        while not self._stop_event.wait(self._INTERVAL):
+            current = self._snapshot()
+            if current == self._baseline:
+                continue
+
+            # Find which file changed
+            changed = next(
+                (p for p, m in current.items() if self._baseline.get(p) != m),
+                next((p for p in self._baseline if p not in current), "unknown"),
+            )
+            try:
+                rel = Path(changed).relative_to(self._root)
+            except ValueError:
+                rel = changed
+
+            console.print(f"\n[yellow]● File changed: {rel} — restarting…[/yellow]")
+
+            global _restart_requested
+            _restart_requested = True
+            os.kill(os.getpid(), signal.SIGTERM)
+            return  # watcher's job is done; process will restart
+
+    def stop(self) -> None:
+        self._stop_event.set()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -149,8 +215,13 @@ def run(
     discord: bool = typer.Option(False, "--discord", help="Discord bot"),
     web: bool = typer.Option(False, "--web", help="Browser-based web UI"),
     skip_checks: bool = typer.Option(False, "--skip-checks", help="Skip pre-flight checks"),
+    watch: bool = typer.Option(False, "--watch", "-w",
+                               help="Auto-restart when .py or config/.env files change"),
 ) -> None:
     """Start the Atlas agent."""
+    global _restart_requested
+    _restart_requested = False
+
     mode = "cli" if cli else "discord" if discord else "web" if web else "telegram"
 
     env = _load_env()
@@ -178,10 +249,28 @@ def run(
 
     # Load env into os.environ before starting the agent
     from dotenv import load_dotenv
-    load_dotenv(ENV_FILE)
+    load_dotenv(ENV_FILE, override=True)
+
+    if watch:
+        console.print("[dim]Watch mode — will restart on code or config changes.[/dim]\n")
 
     console.print(f"\n[green]Starting Atlas ({mode} mode)…[/green]\n")
-    asyncio.run(_run_agent(mode))
+
+    watcher: _FileWatcher | None = None
+    if watch:
+        watcher = _FileWatcher(ROOT)
+        watcher.start()
+
+    try:
+        asyncio.run(_run_agent(mode))
+    finally:
+        if watcher:
+            watcher.stop()
+
+    if _restart_requested:
+        console.print("[green]Restarting…[/green]\n")
+        time.sleep(0.3)  # brief pause so the terminal line flushes
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 @app.command()

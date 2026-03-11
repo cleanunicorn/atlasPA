@@ -100,7 +100,13 @@ class OpenAIProvider(BaseLLMProvider):
         """Stream tokens via on_token callback; return full LLMResponse when done."""
         openai_messages = self._build_messages(messages, system)
 
-        kwargs = dict(model=self._model, max_tokens=max_tokens, messages=openai_messages, stream=True)
+        kwargs = dict(
+            model=self._model,
+            max_tokens=max_tokens,
+            messages=openai_messages,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
         if tools:
             kwargs["tools"] = [
                 {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
@@ -112,9 +118,15 @@ class OpenAIProvider(BaseLLMProvider):
         # tool-call accumulator: index → {id, name, args_str}
         tc_acc: dict[int, dict] = {}
         finish_reason: str = "stop"
+        usage: dict[str, int] = {}
 
         stream = await self.client.chat.completions.create(**kwargs)
         async for chunk in stream:
+            if chunk.usage:
+                usage = {
+                    "input_tokens": chunk.usage.prompt_tokens,
+                    "output_tokens": chunk.usage.completion_tokens,
+                }
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -153,6 +165,7 @@ class OpenAIProvider(BaseLLMProvider):
             content="".join(content_parts) or None,
             tool_calls=tool_calls,
             stop_reason=stop_reason_map.get(finish_reason, "end_turn"),
+            usage=usage,
         )
 
     def _build_messages(self, messages: list[Message], system: str | None) -> list[dict]:

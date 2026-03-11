@@ -60,6 +60,16 @@ class _Clarification:
         self.question = question
 
 
+class _Restart:
+    """
+    Sentinel returned by the reload tool.
+    After the current turn's response is delivered, the process re-execs itself.
+    A short delay gives channels time to send the final message before the
+    process image is replaced.
+    """
+    DELAY = 2.0  # seconds between response delivery and os.execv
+
+
 class Brain:
     """
     ReAct reasoning engine.
@@ -315,6 +325,17 @@ class Brain:
                     "required": ["goal", "accomplished", "gaps"],
                 },
             ),
+            ToolDefinition(
+                name="reload",
+                description=(
+                    "Restart the Atlas process to pick up code changes, newly installed "
+                    "dependencies, or updated configuration. Use this after: installing a "
+                    "skill that requires new packages, editing source files, or when the "
+                    "user asks you to restart. The process will restart automatically "
+                    "2 seconds after the response is delivered."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
         ]
 
     def _get_all_tools(self) -> list[ToolDefinition]:
@@ -479,6 +500,10 @@ class Brain:
                 return "Reflection complete: all steps done. Proceed with your final answer."
             return f"Reflection: gaps identified — {gaps}. Address these before concluding."
 
+        if tool_call.name == "reload":
+            logger.info("Reload requested — process will restart after response is delivered")
+            return _Restart()
+
         if tool_call.name == "manage_skills":
             action = tool_call.arguments.get("action", "")
             if action == "list":
@@ -519,6 +544,7 @@ class Brain:
         user_message: str | list,
         conversation_history: list[Message],
         on_token: Callable[[str], Awaitable[None]] | None = None,
+        system_suffix: str = "",
     ) -> tuple[str, list[Message]]:
         """
         Run the ReAct loop for a single user message.
@@ -530,6 +556,9 @@ class Brain:
             on_token:               Optional async callback called with each text
                                     token of the final response as it streams in.
                                     Only fires on the last (non-tool-call) iteration.
+            system_suffix:          Optional text appended to the system prompt.
+                                    Used by the scheduler to inject "always fetch
+                                    fresh data" instructions for background jobs.
 
         Returns:
             (final_response_text, updated_history)
@@ -548,6 +577,8 @@ class Brain:
         # Build system prompt — pass query for relevance-filtered context injection
         skills_summary = self.skills.get_skills_summary()
         system = self.memory.build_system_prompt(skills_summary, query=query_text)
+        if system_suffix:
+            system = system + "\n\n---\n" + system_suffix
 
         messages = list(conversation_history) + [
             Message(role="user", content=user_message)
@@ -590,10 +621,14 @@ class Brain:
                 )
 
                 clarification: str | None = None
+                restart: _Restart | None = None
                 for tc, raw in zip(response.tool_calls, raw_results):
                     if isinstance(raw, _Clarification):
                         clarification = raw.question
                         result_text = f"[Asking user: {raw.question}]"
+                    elif isinstance(raw, _Restart):
+                        restart = raw
+                        result_text = "[Restart scheduled — will restart after this response]"
                     elif isinstance(raw, Exception):
                         result_text = f"Error in {tc.name}: {raw}"
                         logger.error(f"Tool {tc.name} raised: {raw}")
@@ -610,6 +645,27 @@ class Brain:
                     messages.append(Message(role="assistant", content=clarification))
                     logger.info("Returning clarification question to user.")
                     return clarification, messages
+
+                # If reload was called, let the LLM produce a final response then restart
+                if restart:
+                    # One more LLM call so the agent can say "restarting now…"
+                    all_tools = self._get_all_tools()
+                    response = await self.provider.stream(
+                        messages=messages,
+                        tools=all_tools,
+                        system=system,
+                        on_token=on_token,
+                    )
+                    final_text = _clean_response(response.content or "Restarting…")
+                    messages.append(Message(role="assistant", content=final_text))
+                    logger.info("Reload confirmed — scheduling process restart")
+                    import threading, os as _os, sys as _sys
+                    def _do_restart():
+                        import time
+                        time.sleep(_Restart.DELAY)
+                        _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+                    threading.Thread(target=_do_restart, daemon=True, name="atlas-reload").start()
+                    return final_text, messages
 
                 continue
 

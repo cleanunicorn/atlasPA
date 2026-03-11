@@ -32,6 +32,19 @@ from heartbeat.jobs import Job, load_jobs
 
 logger = logging.getLogger(__name__)
 
+# Injected into the system prompt for every scheduled job run.
+# Prevents the agent from short-circuiting tool calls because it already
+# "knows" the answer from a previous memory entry.
+_SCHEDULED_TASK_NOTE = (
+    "You are running as a **scheduled background task**, not in a live conversation.\n"
+    "IMPORTANT: Memory entries may be stale. Always call the appropriate skill to "
+    "fetch current data before composing your response — for example, always query "
+    "the calendar directly instead of relying on a previously remembered event list. "
+    "Do not skip tool calls just because similar information appears in memory. "
+    "After fetching fresh data, if any memory entries are now outdated, call `forget` "
+    "to remove them and `remember` to store the updated facts."
+)
+
 
 class Scheduler:
     """
@@ -131,7 +144,11 @@ class Scheduler:
         """Execute a job: call brain.think() and push the response."""
         logger.info(f"Running job '{job_id}'")
         try:
-            response, _ = await self.brain.think(prompt, conversation_history=[])
+            response, _ = await self.brain.think(
+                prompt,
+                conversation_history=[],
+                system_suffix=_SCHEDULED_TASK_NOTE,
+            )
             files = self.brain.take_files()
 
             if self.notify_callback:
