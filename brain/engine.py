@@ -19,6 +19,7 @@ Phase 6 additions:
 
 import asyncio
 import logging
+import os
 import re
 from collections.abc import Callable, Awaitable
 from pathlib import Path
@@ -29,6 +30,7 @@ from skills.registry import SkillRegistry
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10  # Safety cap on the ReAct loop
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 # ── Response sanitisation ─────────────────────────────────────────────────────
 
@@ -375,6 +377,7 @@ class Brain:
         response = await self.provider.complete(
             messages=[Message(role="user", content=content)],
             system=system,
+            max_tokens=MAX_TOKENS,
             json_mode=True,
         )
         raw = (response.content or "").strip()
@@ -598,6 +601,7 @@ class Brain:
                 messages=messages,
                 tools=all_tools,
                 system=system,
+                max_tokens=MAX_TOKENS,
                 on_token=on_token,
             )
 
@@ -654,6 +658,7 @@ class Brain:
                         messages=messages,
                         tools=all_tools,
                         system=system,
+                        max_tokens=MAX_TOKENS,
                         on_token=on_token,
                     )
                     final_text = _clean_response(response.content or "Restarting…")
