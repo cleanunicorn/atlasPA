@@ -60,6 +60,7 @@ class BaseLLMProvider(ABC):
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
         max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """
         Send messages to the LLM and return a unified response.
@@ -69,6 +70,8 @@ class BaseLLMProvider(ABC):
             tools:      Available tools the model may call.
             system:     System prompt (injected separately from messages).
             max_tokens: Maximum tokens to generate.
+            json_mode:  If True, instruct the model to return valid JSON only.
+                        Incompatible with tool use — do not pass tools when set.
 
         Returns:
             LLMResponse with content and/or tool_calls.

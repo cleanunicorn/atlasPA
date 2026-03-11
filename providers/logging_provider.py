@@ -51,10 +51,11 @@ class LoggingProvider(BaseLLMProvider):
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
         max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> LLMResponse:
         ts = datetime.now(timezone.utc).isoformat()
 
-        response = await self._inner.complete(messages, tools, system, max_tokens)
+        response = await self._inner.complete(messages, tools, system, max_tokens, json_mode)
 
         entry = {
             "ts": ts,

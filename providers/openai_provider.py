@@ -29,6 +29,7 @@ class OpenAIProvider(BaseLLMProvider):
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
         max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """Send messages to OpenAI and return a unified LLMResponse."""
 
@@ -85,6 +86,9 @@ class OpenAIProvider(BaseLLMProvider):
                 for t in tools
             ]
             kwargs["tool_choice"] = "auto"
+
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
 
         response = await self.client.chat.completions.create(**kwargs)
         choice = response.choices[0]

@@ -25,6 +25,7 @@ class AnthropicProvider(BaseLLMProvider):
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
         max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> LLMResponse:
 
         # Convert our unified Message format → Anthropic format
@@ -71,6 +72,9 @@ class AnthropicProvider(BaseLLMProvider):
             max_tokens=max_tokens,
             messages=anthropic_messages,
         )
+        if json_mode:
+            # Anthropic has no native JSON mode; prepend a strong instruction.
+            system = (system + "\n\n" if system else "") + "Reply with valid JSON only — no prose, no markdown fences."
         if system:
             kwargs["system"] = system
         if anthropic_tools:

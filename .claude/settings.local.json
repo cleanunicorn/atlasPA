@@ -13,7 +13,9 @@
       "Bash(uv run python -m pytest tests/ -q --ignore=tests/test_skills.py)",
       "Bash(uv run python -m pytest tests/test_heartbeat.py::test_scheduler_job_failure_doesnt_crash -q)",
       "Bash(uv run python *)",
-      "Bash(uv add \"typer[all]>=0.12\")"
+      "Bash(uv add \"typer[all]>=0.12\")",
+      "Bash(grep -n \"response_format\\\\|json_mode\\\\|json_object\" /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)",
+      "Bash(grep -n \"async def complete\\\\|def complete\" /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)"
     ]
   }
 }

@@ -6,16 +6,18 @@ The Brain — implements the ReAct (Reason + Act) loop.
 Loop:
     1. Build context: system prompt (soul + relevant memory + skills index)
     2. Call LLM with conversation history + available tools
-    3. If LLM returns tool calls → execute them → append results → go to 2
+    3. If LLM returns tool calls → execute them concurrently → append results → go to 2
     4. If LLM returns final text → return it
     5. Loop max MAX_ITERATIONS times to prevent runaway agents
 
-Phase 2 additions:
-    - `forget` built-in tool: remove a memory entry by content match
-    - Relevance-aware system prompt: passes current query to MemoryStore
-    - Auto-summarisation: compresses context.md after `remember` if needed
+Phase 6 additions:
+    - Parallel tool execution via asyncio.gather
+    - `ask_user` built-in: request clarification instead of guessing
+    - `create_plan` built-in: structure complex multi-step tasks upfront
+    - `reflect` built-in: self-assessment mid-task to catch missed steps
 """
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -51,6 +53,12 @@ def _clean_response(text: str) -> str:
     return text.strip() or "(no response)"
 
 
+class _Clarification:
+    """Sentinel returned by ask_user to stop the loop and surface a question."""
+    def __init__(self, question: str):
+        self.question = question
+
+
 class Brain:
     """
     ReAct reasoning engine.
@@ -64,10 +72,34 @@ class Brain:
         self.memory = memory
         self.skills = skills
         self._pending_files: list[tuple[Path, str]] = []  # (path, caption) queued by send_file
+        self._current_plan: str | None = None  # Set by create_plan, cleared each turn
         self.heartbeat = None  # Set by gateway after Heartbeat is created
 
         # Built-in tools — always available, regardless of installed skills
         self._builtin_tools = [
+            ToolDefinition(
+                name="set_location",
+                description=(
+                    "Update the user's current location. Call this when the user says they "
+                    "are travelling to or are currently in a different place. The timezone "
+                    "is used so that times and scheduling are always correct for where the "
+                    "user actually is. Pass an empty string for both fields to reset to home."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City and country (e.g. 'Amsterdam, Netherlands'). Empty string to reset.",
+                        },
+                        "timezone": {
+                            "type": "string",
+                            "description": "IANA timezone name (e.g. 'Europe/Amsterdam'). Empty string to reset.",
+                        },
+                    },
+                    "required": ["location", "timezone"],
+                },
+            ),
             ToolDefinition(
                 name="remember",
                 description=(
@@ -214,10 +246,124 @@ class Brain:
                     "required": ["action"],
                 },
             ),
+            # ── Phase 6: advanced reasoning ──────────────────────────────────
+            ToolDefinition(
+                name="ask_user",
+                description=(
+                    "Ask the user a single focused clarifying question when their intent is "
+                    "ambiguous or you need a specific piece of information to proceed "
+                    "accurately. Use this instead of guessing. Do not ask multiple questions."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "One clear, specific question for the user",
+                        }
+                    },
+                    "required": ["question"],
+                },
+            ),
+            ToolDefinition(
+                name="create_plan",
+                description=(
+                    "Before tackling a complex multi-step task, lay out a structured plan. "
+                    "Call this once at the start to organise your approach, then execute "
+                    "the steps using other tools. Helps avoid missed steps on long tasks."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Short descriptive title for the plan",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Ordered list of steps to execute",
+                        },
+                    },
+                    "required": ["title", "steps"],
+                },
+            ),
+            ToolDefinition(
+                name="reflect",
+                description=(
+                    "Verify that you have fully addressed the user's request before "
+                    "giving a final answer. Use after executing a plan or finishing a "
+                    "complex multi-step task. Identify any gaps and address them."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "goal": {
+                            "type": "string",
+                            "description": "What the user originally asked for",
+                        },
+                        "accomplished": {
+                            "type": "string",
+                            "description": "Summary of what has been done so far",
+                        },
+                        "gaps": {
+                            "type": "string",
+                            "description": "Anything still needed, or 'none'",
+                        },
+                    },
+                    "required": ["goal", "accomplished", "gaps"],
+                },
+            ),
         ]
 
     def _get_all_tools(self) -> list[ToolDefinition]:
         return self._builtin_tools + self.skills.get_tool_definitions()
+
+    async def extract(
+        self,
+        text: str,
+        schema: dict,
+        instruction: str = "",
+    ) -> dict:
+        """
+        Extract structured data from *text* as JSON.
+
+        Uses the provider's json_mode so the response is guaranteed to be
+        parseable JSON that matches *schema*.  Skills can call this when they
+        need structured output from unstructured content (e.g. parsing a
+        document, summarising into a fixed shape, etc.).
+
+        Args:
+            text:        The raw content to extract from.
+            schema:      JSON Schema dict describing the expected output shape.
+            instruction: Optional guidance on what to extract (prepended to text).
+
+        Returns:
+            Parsed dict.  Raises ValueError if the response is not valid JSON.
+        """
+        import json as _json
+
+        system = (
+            "You are a data-extraction assistant. "
+            "Read the input and return ONLY a valid JSON object that matches this schema:\n"
+            f"{_json.dumps(schema, indent=2)}\n"
+            "No prose, no markdown fences — raw JSON only."
+        )
+        content = f"{instruction}\n\n{text}".strip() if instruction else text
+        response = await self.provider.complete(
+            messages=[Message(role="user", content=content)],
+            system=system,
+            json_mode=True,
+        )
+        raw = (response.content or "").strip()
+        # Strip accidental markdown fences that some models add despite instructions
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError as exc:
+            raise ValueError(f"Model returned non-JSON output: {raw[:200]}") from exc
 
     def take_files(self) -> list[Path]:
         """
@@ -230,6 +376,17 @@ class Brain:
 
     async def _execute_tool(self, tool_call: ToolCall) -> str:
         """Execute a tool call and return the result as a string."""
+
+        if tool_call.name == "set_location":
+            location = tool_call.arguments.get("location", "").strip()
+            timezone = tool_call.arguments.get("timezone", "").strip()
+            self.memory.set_current_location(location, timezone)
+            if location:
+                logger.info(f"Location set: {location} ({timezone})")
+                return f"✅ Location updated: {location} ({timezone})"
+            else:
+                logger.info("Location reset to home")
+                return "✅ Location reset to home timezone."
 
         if tool_call.name == "remember":
             note = tool_call.arguments.get("note", "")
@@ -297,6 +454,30 @@ class Brain:
             logger.info(f"Deleted job '{job_id}'")
             return f"✅ Job '{job_id}' deleted."
 
+        if tool_call.name == "ask_user":
+            question = tool_call.arguments.get("question", "Could you clarify your request?")
+            logger.info(f"Clarification requested: {question[:120]}")
+            return _Clarification(question)
+
+        if tool_call.name == "create_plan":
+            title = tool_call.arguments.get("title", "Plan")
+            steps = tool_call.arguments.get("steps", [])
+            if not isinstance(steps, list):
+                steps = [str(steps)]
+            plan_lines = [f"**{title}**"] + [f"{i + 1}. {s}" for i, s in enumerate(steps)]
+            self._current_plan = "\n".join(plan_lines)
+            logger.info(f"Plan created ({len(steps)} steps): {title}")
+            return f"Plan recorded:\n{self._current_plan}"
+
+        if tool_call.name == "reflect":
+            goal = tool_call.arguments.get("goal", "")
+            accomplished = tool_call.arguments.get("accomplished", "")
+            gaps = tool_call.arguments.get("gaps", "none").strip()
+            logger.info(f"Reflection — goal: {goal[:80]} | gaps: {gaps[:80]}")
+            if gaps.lower() in ("none", "nothing", "n/a", ""):
+                return "Reflection complete: all steps done. Proceed with your final answer."
+            return f"Reflection: gaps identified — {gaps}. Address these before concluding."
+
         if tool_call.name == "manage_skills":
             action = tool_call.arguments.get("action", "")
             if action == "list":
@@ -347,7 +528,8 @@ class Brain:
         Returns:
             (final_response_text, updated_history)
         """
-        self._pending_files = []  # Clear any leftover files from previous turn
+        self._pending_files = []   # Clear any leftover files from previous turn
+        self._current_plan = None  # Reset plan each conversation turn
 
         # Build system prompt — pass query for relevance-filtered context injection
         skills_summary = self.skills.get_skills_summary()
@@ -371,7 +553,8 @@ class Brain:
             )
 
             if response.tool_calls:
-                logger.info(f"Tool calls: {[tc.name for tc in response.tool_calls]}")
+                names = [tc.name for tc in response.tool_calls]
+                logger.info(f"Tool calls (parallel): {names}")
 
                 messages.append(Message(
                     role="assistant",
@@ -382,13 +565,33 @@ class Brain:
                     ],
                 ))
 
-                for tool_call in response.tool_calls:
-                    result = await self._execute_tool(tool_call)
+                # Execute all tool calls concurrently; capture exceptions per-call
+                raw_results = await asyncio.gather(
+                    *[self._execute_tool(tc) for tc in response.tool_calls],
+                    return_exceptions=True,
+                )
+
+                clarification: str | None = None
+                for tc, raw in zip(response.tool_calls, raw_results):
+                    if isinstance(raw, _Clarification):
+                        clarification = raw.question
+                        result_text = f"[Asking user: {raw.question}]"
+                    elif isinstance(raw, Exception):
+                        result_text = f"Error in {tc.name}: {raw}"
+                        logger.error(f"Tool {tc.name} raised: {raw}")
+                    else:
+                        result_text = raw
                     messages.append(Message(
                         role="tool",
-                        content=result,
-                        tool_call_id=tool_call.id,
+                        content=result_text,
+                        tool_call_id=tc.id,
                     ))
+
+                # If ask_user was called, surface the question and stop this turn
+                if clarification:
+                    messages.append(Message(role="assistant", content=clarification))
+                    logger.info("Returning clarification question to user.")
+                    return clarification, messages
 
                 continue
 
