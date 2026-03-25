@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from memory.retriever import ContextEntry, select_relevant
+from memory.retriever import ContextEntry, select_relevant, select_relevant_semantic
 
 MEMORY_DIR = Path(__file__).parent
 
@@ -36,6 +36,12 @@ class MemoryStore:
         self.context_path = MEMORY_DIR / "context.md"
         self.location_path = MEMORY_DIR / "location.md"
         self._ensure_files()
+
+        # Semantic memory (disable by setting EMBED_MODEL="" in env)
+        from memory.embedder import LocalEmbedder
+        from memory.embedding_cache import EmbeddingCache
+        self._embedder = LocalEmbedder()
+        self._cache = EmbeddingCache() if self._embedder.enabled else None
 
     def _ensure_files(self) -> None:
         """Create memory files with defaults if they don't exist."""
@@ -226,7 +232,7 @@ class MemoryStore:
 
     # ── System Prompt ─────────────────────────────────────────────────────────
 
-    def build_system_prompt(self, skills_summary: str = "", query: str = "") -> str:
+    async def build_system_prompt(self, skills_summary: str = "", query: str = "") -> str:
         """
         Assemble the full system prompt from soul + context + skills.
 
@@ -264,7 +270,12 @@ class MemoryStore:
             background = [e for e in entries if not e.timestamp]
             dated = [e for e in entries if e.timestamp]
 
-            selected_dated = select_relevant(dated, query or "", top_k=CONTEXT_MAX_INJECTED)
+            if self._embedder.enabled and self._cache is not None:
+                selected_dated = await select_relevant_semantic(
+                    dated, query or "", self._embedder, self._cache, top_k=CONTEXT_MAX_INJECTED
+                )
+            else:
+                selected_dated = select_relevant(dated, query or "", top_k=CONTEXT_MAX_INJECTED)
 
             selected = background + selected_dated
             if len(selected) < len(entries):

@@ -15,8 +15,8 @@ import logging
 import os
 import time
 from pathlib import Path
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from memory.history import ConversationHistory
 from channels.telegram.formatting import md_to_html
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Persistent reply keyboard shown to all authorised users
 _MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton("/clear"), KeyboardButton("/status")]],
+    [[KeyboardButton("/clear"), KeyboardButton("/status"), KeyboardButton("/jobs")]],
     resize_keyboard=True,
     is_persistent=True,
 )
@@ -79,6 +79,8 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("start", self._cmd_start))
         self.app.add_handler(CommandHandler("clear", self._cmd_clear))
         self.app.add_handler(CommandHandler("status", self._cmd_status))
+        self.app.add_handler(CommandHandler("jobs", self._cmd_jobs))
+        self.app.add_handler(CallbackQueryHandler(self._handle_job_button, pattern=r"^run_job:"))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
         )
@@ -119,6 +121,7 @@ class TelegramBot:
             await update.message.reply_text("⛔ Unauthorized.")
             return
         self._history.clear(str(user_id))
+        self.brain.reset_session_tokens()
         await update.message.reply_text("🧹 Conversation cleared.", reply_markup=_MAIN_KEYBOARD)
 
     async def _reply(self, update: Update, text: str, reply_markup=None) -> None:
@@ -142,15 +145,54 @@ class TelegramBot:
         provider_name = self.brain.provider.model_name
         skills = self.brain.skills.all_skill_names()
         context_entries = len(self.brain.memory.parse_context_entries())
+        tokens = self.brain.session_tokens
         await self._reply(
             update,
             f"🤖 **Agent Status**\n"
             f"Model: `{provider_name}`\n"
             f"Conversation: {len(history)} messages\n"
             f"Long-term memories: {context_entries}\n"
-            f"Skills: {', '.join(skills) or 'none'}",
+            f"Skills: {', '.join(skills) or 'none'}\n"
+            f"Tokens (session): {tokens['input']} in / {tokens['output']} out",
             reply_markup=_MAIN_KEYBOARD,
         )
+
+    async def _cmd_jobs(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not self._is_allowed(user_id):
+            await update.message.reply_text("⛔ Unauthorized.")
+            return
+        from heartbeat.jobs import load_jobs
+        jobs = [j for j in load_jobs() if j.enabled]
+        if not jobs:
+            await update.message.reply_text("No scheduled jobs configured.", reply_markup=_MAIN_KEYBOARD)
+            return
+        buttons = [
+            [InlineKeyboardButton(f"▶ {j.id}  ({j.schedule})", callback_data=f"run_job:{j.id}")]
+            for j in jobs
+        ]
+        await update.message.reply_text(
+            "Tap a job to run it now:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    async def _handle_job_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not self._is_allowed(query.from_user.id):
+            await query.answer("⛔ Unauthorized.")
+            return
+        job_id = query.data.removeprefix("run_job:")
+        await query.answer(f"Triggering {job_id}…")
+
+        heartbeat = getattr(self.brain, "heartbeat", None)
+        if not heartbeat:
+            await query.edit_message_text("⚠️ Heartbeat scheduler is not running.")
+            return
+        triggered = heartbeat.trigger_job(job_id)
+        if triggered:
+            await query.edit_message_text(f"▶ Job <b>{job_id}</b> is running — result will arrive shortly.", parse_mode="HTML")
+        else:
+            await query.edit_message_text(f"⚠️ Job '{job_id}' not found.")
 
     async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """

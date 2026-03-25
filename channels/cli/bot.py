@@ -77,6 +77,7 @@ class CLIBot:
                 break
             elif user_input.lower() == "/clear":
                 self._history_store.clear(CLI_USER_ID)
+                self.brain.reset_session_tokens()
                 print("🧹 Conversation cleared.\n")
                 history = []
                 continue
@@ -103,12 +104,24 @@ class CLIBot:
             print()
             history = self._history_store.load(CLI_USER_ID)
             try:
+                print(f"{agent_name}: ", end="", flush=True)
+                _streaming = []
+
+                async def _on_token(chunk: str) -> None:
+                    print(chunk, end="", flush=True)
+                    _streaming.append(chunk)
+
                 response, updated_history = await self.brain.think(
                     user_message=user_input,
                     conversation_history=history,
+                    on_token=_on_token,
                 )
+                if not _streaming:
+                    # No streaming tokens were emitted (e.g. tool-only response);
+                    # print the final text now.
+                    print(response, end="")
+                print("\n")
                 self._history_store.save(CLI_USER_ID, updated_history)
-                print(f"{agent_name}: {response}\n")
                 for path, caption in self.brain.take_files():
                     note = f" — {caption}" if caption else ""
                     print(f"📎 File: {path}{note}\n")
@@ -131,6 +144,7 @@ class CLIBot:
         provider_name = self.brain.provider.model_name
         skills = self.brain.skills.all_skill_names()
         context_entries = len(self.brain.memory.parse_context_entries())
+        tokens = self.brain.session_tokens
         print(
             f"\n🤖 Agent Status\n"
             f"   Name:              {agent_name}\n"
@@ -138,6 +152,7 @@ class CLIBot:
             f"   Conversation:      {history_len} messages\n"
             f"   Long-term memories:{context_entries}\n"
             f"   Skills:            {', '.join(skills) or 'none'}\n"
+            f"   Tokens (session):  {tokens['input']} in / {tokens['output']} out\n"
         )
 
     async def stop(self) -> None:

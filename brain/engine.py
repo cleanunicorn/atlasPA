@@ -53,7 +53,7 @@ def _clean_response(text: str) -> str:
     text = _TOOL_BLOCK_RE.sub("", text)
     text = _TOOL_TAG_RE.sub("", text)
     text = _MULTI_BLANK_RE.sub("\n\n", text)
-    return text.strip() or "(no response)"
+    return text.strip()
 
 
 class _Clarification:
@@ -87,6 +87,7 @@ class Brain:
         self._pending_files: list[tuple[Path, str]] = []  # (path, caption) queued by send_file
         self._current_plan: str | None = None  # Set by create_plan, cleared each turn
         self.heartbeat = None  # Set by gateway after Heartbeat is created
+        self._session_tokens: dict[str, int] = {"input": 0, "output": 0}
 
         # Built-in tools — always available, regardless of installed skills
         self._builtin_tools = [
@@ -542,6 +543,15 @@ class Brain:
 
         return f"Unknown tool: {tool_call.name}"
 
+    @property
+    def session_tokens(self) -> dict[str, int]:
+        """Return cumulative token usage since last reset."""
+        return dict(self._session_tokens)
+
+    def reset_session_tokens(self) -> None:
+        """Reset session token counters (call on /clear)."""
+        self._session_tokens = {"input": 0, "output": 0}
+
     async def think(
         self,
         user_message: str | list,
@@ -579,7 +589,7 @@ class Brain:
 
         # Build system prompt — pass query for relevance-filtered context injection
         skills_summary = self.skills.get_skills_summary()
-        system = self.memory.build_system_prompt(skills_summary, query=query_text)
+        system = await self.memory.build_system_prompt(skills_summary, query=query_text)
         if system_suffix:
             system = system + "\n\n---\n" + system_suffix
 
@@ -604,6 +614,9 @@ class Brain:
                 max_tokens=MAX_TOKENS,
                 on_token=on_token,
             )
+            if response.usage:
+                self._session_tokens["input"] += response.usage.get("input_tokens", 0)
+                self._session_tokens["output"] += response.usage.get("output_tokens", 0)
 
             if response.tool_calls:
                 names = [tc.name for tc in response.tool_calls]
@@ -661,6 +674,9 @@ class Brain:
                         max_tokens=MAX_TOKENS,
                         on_token=on_token,
                     )
+                    if response.usage:
+                        self._session_tokens["input"] += response.usage.get("input_tokens", 0)
+                        self._session_tokens["output"] += response.usage.get("output_tokens", 0)
                     final_text = _clean_response(response.content or "Restarting…")
                     messages.append(Message(role="assistant", content=final_text))
                     logger.info("Reload confirmed — scheduling process restart")

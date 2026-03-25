@@ -32,18 +32,24 @@ from heartbeat.jobs import Job, load_jobs
 
 logger = logging.getLogger(__name__)
 
-# Injected into the system prompt for every scheduled job run.
-# Prevents the agent from short-circuiting tool calls because it already
-# "knows" the answer from a previous memory entry.
-_SCHEDULED_TASK_NOTE = (
-    "You are running as a **scheduled background task**, not in a live conversation.\n"
-    "IMPORTANT: Memory entries may be stale. Always call the appropriate skill to "
-    "fetch current data before composing your response — for example, always query "
-    "the calendar directly instead of relying on a previously remembered event list. "
-    "Do not skip tool calls just because similar information appears in memory. "
-    "After fetching fresh data, if any memory entries are now outdated, call `forget` "
-    "to remove them and `remember` to store the updated facts."
-)
+def _build_job_note(job_id: str, schedule: str) -> str:
+    """Build a per-job system-prompt suffix with context and behavioural rules."""
+    return (
+        f"You are running as a **scheduled background task** "
+        f"(job: `{job_id}`, schedule: `{schedule}`), not in a live conversation.\n\n"
+        "**Rules for this run:**\n"
+        "1. **Always fetch fresh data.** Memory entries may be stale — always call "
+        "the relevant skill (calendar, web search, etc.) to get current information. "
+        "Do not skip a tool call just because similar data appears in memory.\n"
+        "2. **Do not ask clarifying questions.** Nobody is present to answer; make "
+        "reasonable assumptions and proceed.\n"
+        "3. **Write a self-contained message.** Your response is pushed as a "
+        "notification — there is no follow-up turn. Include everything the user needs.\n"
+        "4. **Update stale memory.** After fetching fresh data, remove outdated "
+        "entries with `forget` and store the updated facts with `remember`.\n"
+        "5. **Stay silent if there is nothing to report.** Return an empty string "
+        "rather than padding with filler."
+    )
 
 
 class Scheduler:
@@ -83,6 +89,27 @@ class Scheduler:
             self._scheduler.shutdown(wait=False)
         logger.info("Heartbeat stopped")
 
+    def trigger_job(self, job_id: str) -> bool:
+        """
+        Fire a job immediately, outside its normal schedule.
+        Returns False if job_id is not found in config/jobs.json.
+        """
+        jobs = {j.id: j for j in load_jobs()}
+        if job_id not in jobs:
+            return False
+        job = jobs[job_id]
+        import uuid
+        from datetime import timezone as _tz
+        self._scheduler.add_job(
+            self._run_job,
+            trigger=DateTrigger(run_date=datetime.now(_tz.utc)),
+            id=f"{job_id}__manual__{uuid.uuid4().hex[:6]}",
+            args=[job.id, job.prompt, job.schedule],
+            replace_existing=False,
+        )
+        logger.info(f"Manually triggered job '{job_id}'")
+        return True
+
     def reload_jobs(self) -> None:
         """
         Reload all jobs from config/jobs.json.
@@ -110,7 +137,7 @@ class Scheduler:
             self._run_job,
             trigger=trigger,
             id=job.id,
-            args=[job.id, job.prompt],
+            args=[job.id, job.prompt, job.schedule],
             replace_existing=True,
         )
         logger.info(f"Scheduled job '{job.id}': {job.schedule}")
@@ -140,16 +167,20 @@ class Scheduler:
         except Exception:
             return None
 
-    async def _run_job(self, job_id: str, prompt: str) -> None:
+    async def _run_job(self, job_id: str, prompt: str, schedule: str = "") -> None:
         """Execute a job: call brain.think() and push the response."""
-        logger.info(f"Running job '{job_id}'")
+        logger.info(f"Running job '{job_id}' (schedule: {schedule!r})")
         try:
             response, _ = await self.brain.think(
                 prompt,
                 conversation_history=[],
-                system_suffix=_SCHEDULED_TASK_NOTE,
+                system_suffix=_build_job_note(job_id, schedule),
             )
             files = self.brain.take_files()
+
+            if not response.strip():
+                logger.info(f"Job '{job_id}' had nothing to report — skipping notify")
+                return
 
             if self.notify_callback:
                 await self.notify_callback(response, files)

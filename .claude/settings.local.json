@@ -15,7 +15,11 @@
       "Bash(uv run python *)",
       "Bash(uv add \"typer[all]>=0.12\")",
       "Bash(grep -n \"response_format\\\\|json_mode\\\\|json_object\" /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)",
-      "Bash(grep -n \"async def complete\\\\|def complete\" /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)"
+      "Bash(grep -n \"async def complete\\\\|def complete\" /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)",
+      "Bash(wc -l /home/daniel/Documents/Development/cleanunicorn/atlas/providers/*.py)",
+      "Bash(grep -E \"\\\\.\\(py|md|txt|json\\)$\")",
+      "Bash(ls -1 /home/daniel/Documents/Development/cleanunicorn/atlas/tests/*.py)",
+      "Bash(wc -l /home/daniel/Documents/Development/cleanunicorn/atlas/tests/*.py)"
     ]
   }
 }

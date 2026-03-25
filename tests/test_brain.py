@@ -189,7 +189,7 @@ async def test_empty_response_handled(tmp_memory, empty_skills):
     """Brain handles an LLM response with no content and no tool calls."""
     brain, _ = make_brain([LLMResponse(content=None, tool_calls=[])], tmp_memory, empty_skills)
     response, _ = await brain.think("Hello", conversation_history=[])
-    assert response == "(no response)"
+    assert response == ""
 
 
 @pytest.mark.asyncio
@@ -260,7 +260,7 @@ async def test_relevance_filtering_in_system_prompt(tmp_memory, empty_skills):
         [LLMResponse(content="Electric blue!", tool_calls=[])],
         tmp_memory, empty_skills,
     )
-    system = tmp_memory.build_system_prompt(query="What is the user's favourite colour?")
+    system = await tmp_memory.build_system_prompt(query="What is the user's favourite colour?")
 
     # The relevant entry should be included
     assert "electric blue" in system.lower()

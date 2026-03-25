@@ -82,7 +82,7 @@ def brain(empty_skills):
     provider = MagicMock()
     provider.model_name = "mock"
     memory = MagicMock(spec=MemoryStore)
-    memory.build_system_prompt.return_value = "sys"
+    memory.build_system_prompt = AsyncMock(return_value="sys")
     return Brain(provider=provider, memory=memory, skills=empty_skills)
 
 

@@ -7,12 +7,17 @@ When context.md has many entries, injects only the most relevant ones into
 the system prompt rather than the full file. This keeps the context window
 lean regardless of how much history has accumulated.
 
-Algorithm: keyword overlap scoring (no external dependencies).
-Phase 3 can replace this with proper vector embeddings if needed.
+Algorithm: keyword overlap scoring by default; cosine similarity via a local
+embedding model when LocalEmbedder and EmbeddingCache are provided.
 """
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memory.embedder import LocalEmbedder
+    from memory.embedding_cache import EmbeddingCache
 
 
 # Stop words excluded from keyword matching (too common to be meaningful)
@@ -89,4 +94,56 @@ def select_relevant(
     selected_indices = {i for _, i, _ in scored[:top_k]}
 
     # Return in chronological order
+    return [e for i, e in enumerate(entries) if i in selected_indices]
+
+
+async def select_relevant_semantic(
+    entries: list[ContextEntry],
+    query: str,
+    embedder: "LocalEmbedder",
+    cache: "EmbeddingCache",
+    top_k: int,
+) -> list[ContextEntry]:
+    """
+    Semantic version of select_relevant using cosine similarity.
+
+    Embeds the query via encode_query() and context entries via encode_document(),
+    then returns the top_k entries by cosine similarity. Falls back to keyword
+    scoring if the embedder is unavailable or returns None.
+
+    Args:
+        entries:  Parsed context entries (chronological).
+        query:    The current user message.
+        embedder: LocalEmbedder instance.
+        cache:    EmbeddingCache for persistent storage of document vectors.
+        top_k:    Maximum number of entries to return.
+
+    Returns:
+        Subset of entries, chronological order preserved.
+    """
+    if len(entries) <= top_k:
+        return entries
+
+    # Try semantic scoring
+    from memory.embedder import cosine_similarity
+
+    # Queries use encode_query (not cached — ephemeral)
+    query_vec = await embedder.embed_query(query)
+    if query_vec is None:
+        # Embedder unavailable — fall back to keyword scoring
+        return select_relevant(entries, query, top_k)
+
+    entry_vecs = await cache.get_or_compute_batch(
+        [e.content for e in entries], embedder
+    )
+
+    scored = []
+    for i, (e, vec) in enumerate(zip(entries, entry_vecs)):
+        sim = cosine_similarity(query_vec, vec) if vec is not None else 0.0
+        scored.append((sim, i, e))
+
+    cache.save()
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    selected_indices = {i for _, i, _ in scored[:top_k]}
     return [e for i, e in enumerate(entries) if i in selected_indices]
