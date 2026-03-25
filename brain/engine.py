@@ -29,7 +29,7 @@ from skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 10  # Safety cap on the ReAct loop
+MAX_ITERATIONS = 30  # Safety cap on the ReAct loop
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 # ── Response sanitisation ─────────────────────────────────────────────────────
@@ -691,7 +691,7 @@ class Brain:
                 continue
 
             else:
-                final_text = _clean_response(response.content or "")
+                final_text = _clean_response(response.content or "") or "✅ Done."
                 messages.append(Message(role="assistant", content=final_text))
                 logger.info(
                     f"Brain finished in {iteration + 1} iteration(s). "
