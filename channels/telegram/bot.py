@@ -126,7 +126,7 @@ class TelegramBot:
 
     async def _reply(self, update: Update, text: str, reply_markup=None) -> None:
         """Send a reply with Telegram HTML formatting, splitting if needed."""
-        html_text = md_to_html(text)
+        html_text = md_to_html(text) or "✅ Done."
         if len(html_text) > 4096:
             # Split on paragraph boundaries when possible
             chunks = [html_text[i:i+4096] for i in range(0, len(html_text), 4096)]
