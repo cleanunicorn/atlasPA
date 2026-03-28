@@ -54,7 +54,7 @@ class CLIBot:
         print(f"\n{'=' * 50}")
         print(f"  {agent_name} — Personal AI Agent (CLI Mode){resume_note}")
         print(f"{'=' * 50}")
-        print(f"  Commands: /clear, /status, /image <path>, /quit")
+        print(f"  Commands: /clear, /status, /image <path>, /voice <path>, /quit")
         print(f"{'=' * 50}\n")
 
         loop = asyncio.get_event_loop()
@@ -100,27 +100,38 @@ class CLIBot:
                 img_b64 = base64.b64encode(image_path.read_bytes()).decode()
                 user_input = [{"type": "image", "media_type": media_type, "data": img_b64}]
                 print(f"📸 Image loaded: {image_path.name}\n")
+            elif user_input.lower().startswith("/voice "):
+                audio_path = Path(user_input[7:].strip()).expanduser()
+                if not audio_path.exists():
+                    print(f"⚠️  File not found: {audio_path}\n")
+                    continue
+                print(f"🎤 Transcribing: {audio_path.name}...")
+                try:
+                    from channels.transcribe import transcribe
+                    transcript = await transcribe(audio_path)
+                    print(f"📝 Transcript: {transcript}\n")
+                    user_input = transcript
+                except RuntimeError as e:
+                    print(f"⚠️  Transcription unavailable: {e}\n")
+                    continue
+                except Exception as e:
+                    print(f"⚠️  Transcription failed: {e}\n")
+                    continue
 
             print()
             history = self._history_store.load(CLI_USER_ID)
             try:
-                print(f"{agent_name}: ", end="", flush=True)
-                _streaming = []
-
-                async def _on_token(chunk: str) -> None:
-                    print(chunk, end="", flush=True)
-                    _streaming.append(chunk)
+                async def _on_status(status: str) -> None:
+                    print(f"\r  {status: <40}", end="", flush=True)
 
                 response, updated_history = await self.brain.think(
                     user_message=user_input,
                     conversation_history=history,
-                    on_token=_on_token,
+                    on_status=_on_status,
                 )
-                if not _streaming:
-                    # No streaming tokens were emitted (e.g. tool-only response);
-                    # print the final text now.
-                    print(response, end="")
-                print("\n")
+                print(f"\r{' ' * 42}\r", end="")  # clear status line
+                print(f"{agent_name}: {response}")
+                print()
                 self._history_store.save(CLI_USER_ID, updated_history)
                 for path, caption in self.brain.take_files():
                     note = f" — {caption}" if caption else ""

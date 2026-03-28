@@ -30,8 +30,8 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 ROOT = Path(__file__).parent
-ENV_FILE = ROOT / "config" / ".env"
-ENV_EXAMPLE = ROOT / "config" / ".env.example"
+from paths import ENV_FILE, CONFIG_DIR          # noqa: E402  (after Path)
+ENV_EXAMPLE = ROOT / "config" / ".env.example"  # template stays in repo
 
 app = typer.Typer(
     name="atlas",

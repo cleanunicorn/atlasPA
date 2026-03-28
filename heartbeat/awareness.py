@@ -41,7 +41,9 @@ LOG_MAX_ENTRIES = 50
 # How many recent *triggered* actions to include in the awareness prompt
 PROMPT_RECENT_ACTIONS = 5
 
-LOG_FILE = Path(__file__).parent.parent / "memory" / "awareness_log.json"
+from paths import MEMORY_DIR
+
+LOG_FILE = MEMORY_DIR / "awareness_log.json"
 
 # Sentinel the LLM should return when no proactive action is needed
 NO_ACTION_SENTINEL = "NO_ACTION"

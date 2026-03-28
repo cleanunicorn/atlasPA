@@ -32,7 +32,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-_CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
+from paths import CONFIG_DIR as _CONFIG_DIR
 _ACCOUNTS_FILE = _CONFIG_DIR / "google_accounts.json"
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 

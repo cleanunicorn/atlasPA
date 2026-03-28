@@ -3,8 +3,8 @@ heartbeat/jobs.py
 
 Job definitions and persistence for the heartbeat scheduler.
 
-Jobs are stored in config/jobs.json so the user can edit them directly
-and the agent can add/remove them via built-in tools.
+Jobs are stored in ~/agent-files/config/jobs.json so the user can edit them
+directly and the agent can add/remove them via built-in tools.
 
 Each job:
     id:       Unique string identifier
@@ -16,11 +16,10 @@ Each job:
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+
+from paths import JOBS_FILE
 
 logger = logging.getLogger(__name__)
-
-JOBS_FILE = Path(__file__).parent.parent / "config" / "jobs.json"
 
 
 @dataclass

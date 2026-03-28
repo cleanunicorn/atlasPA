@@ -24,7 +24,9 @@ from channels.telegram.formatting import md_to_html
 _STREAM_EDIT_INTERVAL = 0.6
 
 # Where incoming files are staged before the brain decides what to do with them
-_UPLOAD_DIR = Path.home() / "agent-files" / "uploads"
+from paths import UPLOADS_DIR
+
+_UPLOAD_DIR = UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +296,7 @@ class TelegramBot:
         caption = update.message.caption or ""
         transcript: str | None = None
         try:
-            from channels.telegram.transcribe import transcribe
+            from channels.transcribe import transcribe
             await update.message.chat.send_action("typing")
             transcript = await transcribe(save_path)
             logger.info(f"Transcribed ({filename}): {transcript[:120]}")
@@ -423,17 +425,14 @@ class TelegramBot:
         """
         placeholder = await update.message.reply_text("…")
 
-        chunks: list[str] = []
         last_edit_at: float = 0.0
 
-        async def on_token(chunk: str) -> None:
+        async def on_status(status: str) -> None:
             nonlocal last_edit_at
-            chunks.append(chunk)
             now = time.monotonic()
             if now - last_edit_at >= _STREAM_EDIT_INTERVAL:
-                partial = "".join(chunks)
                 try:
-                    await placeholder.edit_text(partial)
+                    await placeholder.edit_text(status)
                     last_edit_at = now
                 except Exception:
                     pass  # Ignore edit failures (unchanged text, network hiccup, etc.)
@@ -441,7 +440,7 @@ class TelegramBot:
         response_text, updated_history = await self.brain.think(
             user_message=user_message,
             conversation_history=history,
-            on_token=on_token,
+            on_status=on_status,
         )
 
         # Final edit: apply HTML formatting and attach keyboard

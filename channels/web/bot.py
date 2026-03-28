@@ -24,6 +24,7 @@ Required .env:
 """
 
 import asyncio
+import base64
 import logging
 import os
 from pathlib import Path
@@ -34,13 +35,15 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from memory.history import ConversationHistory
+from paths import DATA_DIR, UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
 # Files served by /files/<name> come from agent-files dir
-_FILES_DIR = Path.home() / "agent-files"
+_FILES_DIR = DATA_DIR
+_UPLOAD_DIR = UPLOADS_DIR
 
 
 class WebBot:
@@ -81,6 +84,13 @@ class WebBot:
             try:
                 while True:
                     data = await websocket.receive_json()
+
+                    # Audio message: {"type": "audio", "data": "<base64>", "filename": "recording.webm"}
+                    if data.get("type") == "audio":
+                        await self._handle_audio_ws(websocket, session_id, history, data)
+                        history = self._history.load(session_id)
+                        continue
+
                     user_msg = (data.get("message") or "").strip()
                     if not user_msg:
                         continue
@@ -94,10 +104,17 @@ class WebBot:
 
                     logger.info(f"Web [{session_id[:8]}]: {user_msg[:100]}")
 
+                    async def _on_status(status: str) -> None:
+                        try:
+                            await websocket.send_json({"type": "status", "content": status})
+                        except Exception:
+                            pass
+
                     try:
                         response, history = await self.brain.think(
                             user_message=user_msg,
                             conversation_history=history,
+                            on_status=_on_status,
                         )
                         self._history.save(session_id, history)
                         await websocket.send_json({"type": "text", "content": response})
@@ -126,6 +143,73 @@ class WebBot:
                 logger.info(f"WebSocket disconnected: session={session_id}")
 
         return app
+
+    async def _handle_audio_ws(
+        self, websocket: WebSocket, session_id: str, history: list, data: dict
+    ) -> None:
+        """Handle an audio message received over WebSocket."""
+        audio_b64 = data.get("data", "")
+        filename = data.get("filename", "recording.webm")
+        if not audio_b64:
+            await websocket.send_json({"type": "error", "content": "Empty audio data."})
+            return
+
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        save_path = _UPLOAD_DIR / f"web_{session_id[:8]}_{filename}"
+        save_path.write_bytes(base64.b64decode(audio_b64))
+
+        logger.info(f"Audio received from web [{session_id[:8]}]: {filename} → {save_path}")
+
+        # Transcribe
+        transcript: str | None = None
+        try:
+            from channels.transcribe import transcribe
+            transcript = await transcribe(save_path)
+            logger.info(f"Transcribed ({filename}): {transcript[:120]}")
+        except RuntimeError as e:
+            logger.warning(f"Transcription unavailable: {e}")
+        except Exception as e:
+            logger.error(f"Transcription failed for {filename}: {e}")
+
+        if transcript:
+            user_message = transcript
+            # Echo the transcript back so the user sees what was heard
+            await websocket.send_json({"type": "transcript", "content": transcript})
+        else:
+            user_message = (
+                f"[System: the user sent a voice/audio message saved to {save_path}. "
+                "Transcription is unavailable — nemo_toolkit may not be installed.]\n"
+                "The user sent an audio message."
+            )
+            await websocket.send_json({
+                "type": "transcript",
+                "content": "(transcription unavailable)",
+            })
+
+        try:
+            response, history = await self.brain.think(
+                user_message=user_message,
+                conversation_history=history,
+            )
+            self._history.save(session_id, history)
+            await websocket.send_json({"type": "text", "content": response})
+
+            for path, caption in self.brain.take_files():
+                path = Path(path)
+                if path.exists():
+                    dest = _FILES_DIR / path.name
+                    if path != dest:
+                        import shutil
+                        shutil.copy2(path, dest)
+                    await websocket.send_json({
+                        "type": "file",
+                        "name": path.name,
+                        "url": f"/files/{path.name}",
+                        "caption": caption,
+                    })
+        except Exception as e:
+            logger.exception("Error processing audio message")
+            await websocket.send_json({"type": "error", "content": str(e)})
 
     async def push_message(self, text: str, files: list | None = None) -> None:
         """

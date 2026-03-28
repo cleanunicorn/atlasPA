@@ -12,13 +12,13 @@ Only document embeddings are cached (queries are ephemeral).
 import hashlib
 import json
 import logging
-from pathlib import Path
 
 from memory.embedder import LocalEmbedder
+from paths import MEMORY_DIR
 
 logger = logging.getLogger(__name__)
 
-_CACHE_FILE = Path(__file__).parent / "embeddings.json"
+_CACHE_FILE = MEMORY_DIR / "embeddings.json"
 
 
 class EmbeddingCache:

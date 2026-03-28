@@ -17,12 +17,10 @@ Phase 2 additions:
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from memory.retriever import ContextEntry, select_relevant, select_relevant_semantic
-
-MEMORY_DIR = Path(__file__).parent
+from paths import MEMORY_DIR
 
 # If context has more than this many entries, use relevance filtering
 CONTEXT_MAX_INJECTED = int(os.getenv("CONTEXT_MAX_INJECTED", "15"))
@@ -45,6 +43,7 @@ class MemoryStore:
 
     def _ensure_files(self) -> None:
         """Create memory files with defaults if they don't exist."""
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
         if not self.soul_path.exists():
             agent_name = os.getenv("AGENT_NAME", "Atlas")
             self.soul_path.write_text(

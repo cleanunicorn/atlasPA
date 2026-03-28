@@ -154,7 +154,7 @@ async def test_schedule_job_tool_creates_job(tmp_path, tmp_memory, empty_skills)
             LLMResponse(
                 content=None,
                 tool_calls=[ToolCall(id="tc1", name="schedule_job", arguments={
-                    "id": "daily_check",
+                    "job_id": "daily_check",
                     "schedule": "0 9 * * 1-5",
                     "prompt": "Daily standup reminder",
                 })],
@@ -214,7 +214,7 @@ async def test_delete_job_tool(tmp_path, tmp_memory, empty_skills):
             [
                 LLMResponse(
                     content=None,
-                    tool_calls=[ToolCall(id="tc3", name="delete_job", arguments={"id": "to_delete"})],
+                    tool_calls=[ToolCall(id="tc3", name="delete_job", arguments={"job_id": "to_delete"})],
                     stop_reason="tool_use",
                 ),
                 LLMResponse(content="Job deleted.", tool_calls=[]),

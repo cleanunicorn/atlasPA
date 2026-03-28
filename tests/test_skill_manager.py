@@ -256,79 +256,61 @@ def test_skills_summary_groups_by_source(tmp_path):
     assert "echo" in summary
 
 
-# ── manage_skills built-in in Brain ───────────────────────────────────────────
+# ── manage_skills built-in tool ───────────────────────────────────────────────
+# Tests call the tool closure directly (no Brain instantiation needed).
 
-@pytest.mark.asyncio
-async def test_brain_manage_skills_install():
-    from brain.engine import Brain
-    from providers.base import ToolCall
+
+def test_brain_manage_skills_install():
+    from brain.engine import _make_manage_skills
     from unittest.mock import MagicMock
 
     mock_skills = MagicMock()
     mock_skills.install.return_value = "✅ Addon skill 'echo' installed successfully."
 
-    brain = Brain(provider=MagicMock(), memory=MagicMock(), skills=mock_skills)
-    tc = ToolCall(id="1", name="manage_skills", arguments={
-        "action": "install",
-        "name": "echo",
-        "skill_md": MINIMAL_SKILL_MD,
-        "tool_py": MINIMAL_TOOL_PY,
-    })
-    result = await brain._execute_tool(tc)
+    tool = _make_manage_skills(mock_skills)
+    result = tool(action="install", name="echo", skill_md=MINIMAL_SKILL_MD, tool_py=MINIMAL_TOOL_PY)
 
     mock_skills.install.assert_called_once_with("echo", MINIMAL_SKILL_MD, MINIMAL_TOOL_PY)
     assert "✅" in result
 
 
-@pytest.mark.asyncio
-async def test_brain_manage_skills_uninstall():
-    from brain.engine import Brain
-    from providers.base import ToolCall
+def test_brain_manage_skills_uninstall():
+    from brain.engine import _make_manage_skills
 
     mock_skills = MagicMock()
     mock_skills.uninstall.return_value = "✅ Addon skill 'echo' uninstalled."
 
-    brain = Brain(provider=MagicMock(), memory=MagicMock(), skills=mock_skills)
-    tc = ToolCall(id="2", name="manage_skills", arguments={"action": "uninstall", "name": "echo"})
-    result = await brain._execute_tool(tc)
+    tool = _make_manage_skills(mock_skills)
+    result = tool(action="uninstall", name="echo")
 
     mock_skills.uninstall.assert_called_once_with("echo")
     assert "✅" in result
 
 
-@pytest.mark.asyncio
-async def test_brain_manage_skills_list():
-    from brain.engine import Brain
-    from providers.base import ToolCall
+def test_brain_manage_skills_list():
+    from brain.engine import _make_manage_skills
 
     mock_skills = MagicMock()
     mock_skills.get_skills_summary.return_value = "Core skills:\n  - search"
 
-    brain = Brain(provider=MagicMock(), memory=MagicMock(), skills=mock_skills)
-    tc = ToolCall(id="3", name="manage_skills", arguments={"action": "list"})
-    result = await brain._execute_tool(tc)
+    tool = _make_manage_skills(mock_skills)
+    result = tool(action="list")
 
     mock_skills.get_skills_summary.assert_called_once()
     assert "search" in result
 
 
-@pytest.mark.asyncio
-async def test_brain_manage_skills_missing_name():
-    from brain.engine import Brain
-    from providers.base import ToolCall
+def test_brain_manage_skills_missing_name():
+    from brain.engine import _make_manage_skills
 
-    brain = Brain(provider=MagicMock(), memory=MagicMock(), skills=MagicMock())
-    tc = ToolCall(id="4", name="manage_skills", arguments={"action": "install"})
-    result = await brain._execute_tool(tc)
+    tool = _make_manage_skills(MagicMock())
+    result = tool(action="install")
     assert "Error" in result
 
 
-@pytest.mark.asyncio
-async def test_brain_manage_skills_unknown_action():
-    from brain.engine import Brain
-    from providers.base import ToolCall
+def test_brain_manage_skills_unknown_action():
+    from brain.engine import _make_manage_skills
 
-    brain = Brain(provider=MagicMock(), memory=MagicMock(), skills=MagicMock())
-    tc = ToolCall(id="5", name="manage_skills", arguments={"action": "explode"})
-    result = await brain._execute_tool(tc)
+    tool = _make_manage_skills(MagicMock())
+    result = tool(action="explode")
     assert "Unknown" in result

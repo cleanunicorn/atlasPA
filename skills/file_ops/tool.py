@@ -27,7 +27,9 @@ PARAMETERS = {
 }
 
 # All file access is sandboxed to this directory
-SANDBOX_DIR = Path.home() / "agent-files"
+from paths import DATA_DIR
+
+SANDBOX_DIR = DATA_DIR
 
 
 def _safe_path(relative_path: str) -> Path | None:

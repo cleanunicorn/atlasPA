@@ -20,10 +20,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from providers.base import Message
+from paths import HISTORY_DIR
 
 logger = logging.getLogger(__name__)
-
-HISTORY_DIR = Path(__file__).parent / "history"
 MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "200"))
 
 

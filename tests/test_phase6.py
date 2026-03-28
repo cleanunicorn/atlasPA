@@ -1,51 +1,24 @@
 """
 tests/test_phase6.py
 
-Tests for Phase 6 — advanced reasoning features:
-  - Parallel tool execution
+Tests for advanced reasoning features:
   - ask_user → clarification returned to caller
   - create_plan → plan stored on brain
   - reflect → gap detection
   - Brain.extract() → structured JSON output
+
+Note: parallel tool execution was a feature of the old hand-rolled ReAct loop.
+DSPy's ReAct runs tools sequentially; that behaviour is exercised in integration.
 """
 
-import asyncio
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from providers.base import Message, LLMResponse, ToolCall
+from brain.engine import _make_reflect, _make_create_plan, _make_ask_user, _TurnState
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
-
-def _make_tool_response(*tool_names: str, content: str = "") -> LLMResponse:
-    """LLMResponse that calls one or more tools."""
-    return LLMResponse(
-        content=content,
-        tool_calls=[
-            ToolCall(id=f"id_{n}", name=n, arguments={})
-            for n in tool_names
-        ],
-        stop_reason="tool_use",
-    )
-
-
-def _make_text_response(text: str) -> LLMResponse:
-    return LLMResponse(content=text, tool_calls=[], stop_reason="end_turn")
-
-
-@pytest.fixture
-def brain(empty_skills):
-    from unittest.mock import MagicMock
-    from memory.store import MemoryStore
-    from brain.engine import Brain
-
-    provider = MagicMock()
-    provider.model_name = "mock"
-    memory = MagicMock(spec=MemoryStore)
-    memory.build_system_prompt = AsyncMock(return_value="sys")
-    return Brain(provider=provider, memory=memory, skills=empty_skills)
 
 
 @pytest.fixture
@@ -58,111 +31,86 @@ def empty_skills(tmp_path):
         yield SkillRegistry()
 
 
-# ── Parallel tool execution ────────────────────────────────────────────────────
+@pytest.fixture
+def tmp_memory(tmp_path):
+    from memory.store import MemoryStore
+    with patch("memory.store.MEMORY_DIR", tmp_path):
+        yield MemoryStore()
+
+
+@pytest.fixture
+def brain(tmp_memory, empty_skills):
+    """Brain with DSPy mocked out for tests that only call extract()."""
+    import types
+    from brain.engine import Brain
+
+    mock_lm = types.SimpleNamespace(model="mock/model")
+    with (
+        patch("brain.engine._build_dspy_lm", return_value=mock_lm),
+        patch("brain.engine.dspy.configure"),
+    ):
+        provider = MagicMock()
+        provider.model_name = "mock"
+        yield Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+
+
+# ── ask_user / clarification ──────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
-async def test_parallel_tools_both_executed(brain):
-    """Two tool calls in one response are both executed (via gather)."""
-    execution_order = []
+async def test_ask_user_returns_question_immediately(tmp_memory, empty_skills):
+    """When ask_user is called, think() stops and returns the question."""
+    from tests.test_brain import make_brain
 
-    async def slow_tool(tc):
-        execution_order.append(tc.name)
-        await asyncio.sleep(0)
-        return f"result:{tc.name}"
-
-    brain._execute_tool = slow_tool
-
-    brain.provider.stream = AsyncMock(side_effect=[
-        _make_tool_response("skill_a", "skill_b"),
-        _make_text_response("done"),
-    ])
-
-    text, _ = await brain.think("go", [])
-    assert "done" in text
-    assert set(execution_order) == {"skill_a", "skill_b"}
-
-
-@pytest.mark.asyncio
-async def test_tool_exception_captured_as_error_message(brain):
-    """If a tool raises, the error is captured as a tool result string."""
-    async def boom(tc):
-        raise RuntimeError("exploded")
-
-    brain._execute_tool = boom
-
-    brain.provider.stream = AsyncMock(side_effect=[
-        _make_tool_response("bad_tool"),
-        _make_text_response("handled"),
-    ])
-
-    text, messages = await brain.think("run", [])
-    assert "handled" in text
-    tool_results = [m.content for m in messages if m.role == "tool"]
-    assert any("exploded" in r for r in tool_results)
-
-
-# ── ask_user / clarification ───────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_ask_user_returns_question_immediately(brain):
-    """When ask_user is called, the loop stops and returns the question."""
-    brain.provider.stream = AsyncMock(return_value=LLMResponse(
-        content="",
-        tool_calls=[ToolCall(id="q1", name="ask_user", arguments={"question": "Which project?"})],
-        stop_reason="tool_use",
-    ))
+    brain, _ = make_brain(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="q1", name="ask_user", arguments={"question": "Which project?"})],
+                stop_reason="tool_use",
+            ),
+            LLMResponse(content="fallback", tool_calls=[]),
+        ],
+        tmp_memory, empty_skills,
+    )
 
     text, messages = await brain.think("do the thing", [])
     assert text == "Which project?"
-    # Final assistant message should be the question
     assert messages[-1].role == "assistant"
     assert messages[-1].content == "Which project?"
 
 
-@pytest.mark.asyncio
-async def test_ask_user_alongside_other_tools(brain):
-    """ask_user wins even when called alongside other tools."""
-    called = []
-
-    original = brain._execute_tool
-
-    async def tracking(tc):
-        called.append(tc.name)
-        return await original(tc)
-
-    brain._execute_tool = tracking
-
-    brain.provider.stream = AsyncMock(return_value=LLMResponse(
-        content="",
-        tool_calls=[
-            ToolCall(id="r1", name="remember", arguments={"note": "x"}),
-            ToolCall(id="q1", name="ask_user", arguments={"question": "Are you sure?"}),
-        ],
-        stop_reason="tool_use",
-    ))
-
-    text, _ = await brain.think("do it", [])
-    assert text == "Are you sure?"
-    assert "remember" in called
-    assert "ask_user" in called
+def test_ask_user_tool_sets_clarification():
+    """ask_user tool closure sets state.clarification and returns sentinel."""
+    state = _TurnState()
+    tool = _make_ask_user(state)
+    result = tool(question="Are you sure?")
+    assert state.clarification == "Are you sure?"
+    assert result == "__ASK_USER__"
 
 
 # ── create_plan ───────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_create_plan_stores_plan(brain):
+async def test_create_plan_stores_plan(tmp_memory, empty_skills):
     """create_plan saves the plan to brain._current_plan."""
-    brain.provider.stream = AsyncMock(side_effect=[
-        LLMResponse(
-            content="",
-            tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
-                "title": "My Plan",
-                "steps": ["Step 1", "Step 2", "Step 3"],
-            })],
-            stop_reason="tool_use",
-        ),
-        _make_text_response("Plan executed."),
-    ])
+    from tests.test_brain import make_brain
+
+    brain, _ = make_brain(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
+                    "title": "My Plan",
+                    "steps": ["Step 1", "Step 2", "Step 3"],
+                })],
+                stop_reason="tool_use",
+            ),
+            LLMResponse(content="Plan executed.", tool_calls=[]),
+        ],
+        tmp_memory, empty_skills,
+    )
 
     await brain.think("complex task", [])
     assert brain._current_plan is not None
@@ -172,19 +120,24 @@ async def test_create_plan_stores_plan(brain):
 
 
 @pytest.mark.asyncio
-async def test_create_plan_result_included_in_tool_messages(brain):
-    """The plan text is returned as the tool result so the LLM sees it."""
-    brain.provider.stream = AsyncMock(side_effect=[
-        LLMResponse(
-            content="",
-            tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
-                "title": "Task Plan",
-                "steps": ["Do A", "Do B"],
-            })],
-            stop_reason="tool_use",
-        ),
-        _make_text_response("ok"),
-    ])
+async def test_create_plan_result_included_in_tool_messages(tmp_memory, empty_skills):
+    """The plan text is returned as the tool result message."""
+    from tests.test_brain import make_brain
+
+    brain, _ = make_brain(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
+                    "title": "Task Plan",
+                    "steps": ["Do A", "Do B"],
+                })],
+                stop_reason="tool_use",
+            ),
+            LLMResponse(content="ok", tool_calls=[]),
+        ],
+        tmp_memory, empty_skills,
+    )
 
     _, messages = await brain.think("task", [])
     tool_msgs = [m.content for m in messages if m.role == "tool"]
@@ -193,33 +146,24 @@ async def test_create_plan_result_included_in_tool_messages(brain):
 
 # ── reflect ───────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_reflect_no_gaps(brain):
+
+def test_reflect_no_gaps():
     """reflect with 'none' gaps returns a 'proceed' message."""
-    result = await brain._execute_tool(
-        ToolCall(id="r1", name="reflect", arguments={
-            "goal": "write a report",
-            "accomplished": "wrote it",
-            "gaps": "none",
-        })
-    )
+    tool = _make_reflect()
+    result = tool(goal="write a report", accomplished="wrote it", gaps="none")
     assert "proceed" in result.lower() or "done" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_reflect_with_gaps(brain):
+def test_reflect_with_gaps():
     """reflect with real gaps returns an 'address these' message."""
-    result = await brain._execute_tool(
-        ToolCall(id="r1", name="reflect", arguments={
-            "goal": "write and send a report",
-            "accomplished": "wrote report",
-            "gaps": "still need to send the email",
-        })
-    )
+    tool = _make_reflect()
+    result = tool(goal="write and send a report", accomplished="wrote report",
+                  gaps="still need to send the email")
     assert "still need to send the email" in result
 
 
 # ── Brain.extract() ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_extract_parses_json(brain):
@@ -234,7 +178,6 @@ async def test_extract_parses_json(brain):
         schema={"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}},
     )
     assert result == {"name": "Alice", "age": 30}
-    # Verify json_mode=True was passed to provider
     _, kwargs = brain.provider.complete.call_args
     assert kwargs.get("json_mode") is True
 

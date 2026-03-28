@@ -24,17 +24,21 @@ Required .env:
 import base64
 import logging
 import os
+import time
 from pathlib import Path
 
 import aiohttp
 import discord
 from discord import app_commands
 from memory.history import ConversationHistory
+from paths import UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
 # Files that can be sent as images in Discord embeds
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+_UPLOAD_DIR = UPLOADS_DIR
 
 
 class DiscordBot:
@@ -121,6 +125,15 @@ class DiscordBot:
 
             user_id = self._user_id_str(message.author)
 
+            # Check for audio attachments first
+            audio_attachments = [
+                a for a in message.attachments
+                if a.content_type and a.content_type.startswith("audio/")
+            ]
+            if audio_attachments:
+                await self._handle_audio(message, audio_attachments, content)
+                return
+
             # Build multimodal content if image attachments are present
             image_attachments = [
                 a for a in message.attachments
@@ -155,13 +168,31 @@ class DiscordBot:
 
             async with message.channel.typing():
                 history = self._history.load(user_id)
+                placeholder = await message.reply("…")
+                last_edit_at = 0.0
+
+                async def _on_status(status: str) -> None:
+                    nonlocal last_edit_at
+                    now = time.monotonic()
+                    if now - last_edit_at >= 1.0:
+                        try:
+                            await placeholder.edit(content=status)
+                            last_edit_at = now
+                        except Exception:
+                            pass
+
                 try:
                     response, updated_history = await self.brain.think(
                         user_message=user_content,
                         conversation_history=history,
+                        on_status=_on_status,
                     )
                     self._history.save(user_id, updated_history)
 
+                    try:
+                        await placeholder.delete()
+                    except Exception:
+                        pass
                     await _send_long(message.reply, response)
 
                     for path, caption in self.brain.take_files():
@@ -169,7 +200,75 @@ class DiscordBot:
 
                 except Exception as e:
                     logger.exception("Error in brain.think()")
+                    try:
+                        await placeholder.delete()
+                    except Exception:
+                        pass
                     await message.reply(f"⚠️ Something went wrong: {e}")
+
+    # ── Audio handling ─────────────────────────────────────────────────────────
+
+    async def _handle_audio(
+        self,
+        message: discord.Message,
+        attachments: list,
+        text: str,
+    ) -> None:
+        """Download audio attachment(s), transcribe via Parakeet, send to brain."""
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Download the first audio attachment
+        att = attachments[0]
+        filename = att.filename or f"audio_{att.id}"
+        save_path = _UPLOAD_DIR / filename
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(att.url) as resp:
+                    save_path.write_bytes(await resp.read())
+            except Exception as e:
+                await message.reply(f"⚠️ Could not download audio: {e}")
+                return
+
+        logger.info(f"Audio received from {message.author}: {filename} → {save_path}")
+
+        # Transcribe
+        transcript: str | None = None
+        try:
+            from channels.transcribe import transcribe
+            transcript = await transcribe(save_path)
+            logger.info(f"Transcribed ({filename}): {transcript[:120]}")
+        except RuntimeError as e:
+            logger.warning(f"Transcription unavailable: {e}")
+        except Exception as e:
+            logger.error(f"Transcription failed for {filename}: {e}")
+
+        if transcript:
+            user_message = transcript
+            if text:
+                user_message = f"{transcript}\n\n[User note: {text}]"
+        else:
+            user_message = (
+                f"[System: the user sent a voice/audio message saved to {save_path}. "
+                "Transcription is unavailable — nemo_toolkit may not be installed.]\n"
+                f"{text or 'The user sent an audio message.'}"
+            )
+
+        user_id = self._user_id_str(message.author)
+        async with message.channel.typing():
+            history = self._history.load(user_id)
+            try:
+                response, updated_history = await self.brain.think(
+                    user_message=user_message,
+                    conversation_history=history,
+                )
+                self._history.save(user_id, updated_history)
+                await _send_long(message.reply, response)
+                for path, caption in self.brain.take_files():
+                    await _send_file(message.reply, Path(path), caption)
+            except Exception as e:
+                logger.exception("Error processing audio message")
+                await message.reply(f"⚠️ Something went wrong: {e}")
 
     # ── Slash commands ────────────────────────────────────────────────────────
 

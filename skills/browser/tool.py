@@ -47,7 +47,9 @@ PARAMETERS = {
     "required": ["url"],
 }
 
-SCREENSHOT_DIR = Path.home() / "agent-files" / "screenshots"
+from paths import SCREENSHOTS_DIR
+
+SCREENSHOT_DIR = SCREENSHOTS_DIR
 MAX_TEXT_CHARS = 12_000
 
 
