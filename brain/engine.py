@@ -26,6 +26,7 @@ from pathlib import Path
 from collections.abc import Callable, Awaitable
 
 import dspy
+from dspy.utils.exceptions import AdapterParseError
 
 from providers.base import BaseLLMProvider, Message
 from memory.store import MemoryStore
@@ -75,6 +76,59 @@ def _clean_response(text: str) -> str:
     text = _TOOL_TAG_RE.sub("", text)
     text = _MULTI_BLANK_RE.sub("\n\n", text)
     return text.strip()
+
+
+# ── Resilient ReAct subclass ─────────────────────────────────────────────────
+
+
+class AtlasReAct(dspy.ReAct):
+    """ReAct subclass that gracefully handles AdapterParseError.
+
+    DSPy's ReAct.forward() only catches ValueError when the LLM produces a
+    malformed response.  AdapterParseError (raised when the LLM outputs raw
+    tool args instead of the expected {next_thought, next_tool_name,
+    next_tool_args} structure) extends Exception directly, so it crashes the
+    entire loop.  This subclass widens the catch so the loop can break
+    gracefully and still produce a final answer from the accumulated trajectory.
+    """
+
+    def forward(self, **input_args):
+        from dspy.predict.react import _fmt_exc
+
+        trajectory = {}
+        max_iters = input_args.pop("max_iters", self.max_iters)
+        for idx in range(max_iters):
+            try:
+                pred = self._call_with_potential_trajectory_truncation(
+                    self.react, trajectory, **input_args
+                )
+            except (ValueError, AdapterParseError) as err:
+                logger.warning(
+                    "Ending the trajectory: Agent failed to select a valid "
+                    f"tool: {_fmt_exc(err)}"
+                )
+                break
+
+            trajectory[f"thought_{idx}"] = pred.next_thought
+            trajectory[f"tool_name_{idx}"] = pred.next_tool_name
+            trajectory[f"tool_args_{idx}"] = pred.next_tool_args
+
+            try:
+                trajectory[f"observation_{idx}"] = self.tools[
+                    pred.next_tool_name
+                ](**pred.next_tool_args)
+            except Exception as err:
+                trajectory[f"observation_{idx}"] = (
+                    f"Execution error in {pred.next_tool_name}: {_fmt_exc(err)}"
+                )
+
+            if pred.next_tool_name == "finish":
+                break
+
+        extract = self._call_with_potential_trajectory_truncation(
+            self.extract, trajectory, **input_args
+        )
+        return dspy.Prediction(trajectory=trajectory, **extract)
 
 
 # ── DSPy Signature ───────────────────────────────────────────────────────────
@@ -229,7 +283,7 @@ class Brain:
         ]
 
         tools = self._build_tools(state)
-        react = dspy.ReAct(AtlasSignature, tools=tools, max_iters=MAX_ITERATIONS)
+        react = AtlasReAct(AtlasSignature, tools=tools, max_iters=MAX_ITERATIONS)
 
         logger.info(
             f"DSPy ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})"
