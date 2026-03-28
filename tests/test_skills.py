@@ -113,8 +113,6 @@ async def test_code_runner_no_stdin():
 @pytest.mark.asyncio
 async def test_http_request_get(httpx_mock=None):
     """http_request returns status and body for a successful GET."""
-    import httpx
-
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.reason_phrase = "OK"

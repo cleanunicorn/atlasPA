@@ -10,7 +10,7 @@ Provider-level streaming tests for the base stream() fallback remain here.
 import asyncio
 import pytest
 
-from providers.base import Message, LLMResponse, ToolCall, ToolDefinition
+from providers.base import Message, LLMResponse, ToolCall
 
 
 # ── Provider base: default stream() fallback ──────────────────────────────────
