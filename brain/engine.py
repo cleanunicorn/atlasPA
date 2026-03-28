@@ -90,6 +90,11 @@ class AtlasReAct(dspy.ReAct):
     next_tool_args} structure) extends Exception directly, so it crashes the
     entire loop.  This subclass widens the catch so the loop can break
     gracefully and still produce a final answer from the accumulated trajectory.
+
+    The extract step (final answer generation) can also fail with
+    AdapterParseError when the LLM returns a plain-text answer instead of
+    the expected JSON {reasoning, answer}.  In that case the raw LLM text
+    is used directly as the answer.
     """
 
     def forward(self, **input_args):
@@ -125,10 +130,21 @@ class AtlasReAct(dspy.ReAct):
             if pred.next_tool_name == "finish":
                 break
 
-        extract = self._call_with_potential_trajectory_truncation(
-            self.extract, trajectory, **input_args
-        )
-        return dspy.Prediction(trajectory=trajectory, **extract)
+        try:
+            extract = self._call_with_potential_trajectory_truncation(
+                self.extract, trajectory, **input_args
+            )
+            return dspy.Prediction(trajectory=trajectory, **extract)
+        except AdapterParseError as err:
+            logger.warning(
+                "Extract step failed to parse LLM response as JSON; "
+                "using raw LLM text as answer."
+            )
+            raw = err.lm_response or ""
+            output_keys = list(self.signature.output_fields.keys())
+            fallback = {k: "" for k in output_keys}
+            fallback[output_keys[-1]] = raw
+            return dspy.Prediction(trajectory=trajectory, **fallback)
 
 
 # ── DSPy Signature ───────────────────────────────────────────────────────────
