@@ -15,8 +15,21 @@ import logging
 import os
 import time
 from pathlib import Path
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
 from memory.history import ConversationHistory
 from channels.telegram.formatting import md_to_html
 
@@ -82,22 +95,18 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("clear", self._cmd_clear))
         self.app.add_handler(CommandHandler("status", self._cmd_status))
         self.app.add_handler(CommandHandler("jobs", self._cmd_jobs))
-        self.app.add_handler(CallbackQueryHandler(self._handle_job_button, pattern=r"^run_job:"))
+        self.app.add_handler(
+            CallbackQueryHandler(self._handle_job_button, pattern=r"^run_job:")
+        )
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
         )
         self.app.add_handler(
             MessageHandler(filters.Document.ALL, self._handle_document)
         )
-        self.app.add_handler(
-            MessageHandler(filters.VOICE, self._handle_voice)
-        )
-        self.app.add_handler(
-            MessageHandler(filters.AUDIO, self._handle_voice)
-        )
-        self.app.add_handler(
-            MessageHandler(filters.PHOTO, self._handle_photo)
-        )
+        self.app.add_handler(MessageHandler(filters.VOICE, self._handle_voice))
+        self.app.add_handler(MessageHandler(filters.AUDIO, self._handle_voice))
+        self.app.add_handler(MessageHandler(filters.PHOTO, self._handle_photo))
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -107,9 +116,7 @@ class TelegramBot:
         agent_name = os.getenv("AGENT_NAME", "Atlas")
         history_len = len(self._history.load(str(user.id)))
         resume_note = (
-            f" (resuming — {history_len} messages in history)"
-            if history_len
-            else ""
+            f" (resuming — {history_len} messages in history)" if history_len else ""
         )
         await update.message.reply_text(
             f"👋 Hi, I'm {agent_name}! Your personal AI agent.{resume_note}\n\n"
@@ -124,19 +131,25 @@ class TelegramBot:
             return
         self._history.clear(str(user_id))
         self.brain.reset_session_tokens()
-        await update.message.reply_text("🧹 Conversation cleared.", reply_markup=_MAIN_KEYBOARD)
+        await update.message.reply_text(
+            "🧹 Conversation cleared.", reply_markup=_MAIN_KEYBOARD
+        )
 
     async def _reply(self, update: Update, text: str, reply_markup=None) -> None:
         """Send a reply with Telegram HTML formatting, splitting if needed."""
         html_text = md_to_html(text) or "✅ Done."
         if len(html_text) > 4096:
             # Split on paragraph boundaries when possible
-            chunks = [html_text[i:i+4096] for i in range(0, len(html_text), 4096)]
+            chunks = [html_text[i : i + 4096] for i in range(0, len(html_text), 4096)]
             for i, chunk in enumerate(chunks):
                 markup = reply_markup if i == len(chunks) - 1 else None
-                await update.message.reply_text(chunk, parse_mode="HTML", reply_markup=markup)
+                await update.message.reply_text(
+                    chunk, parse_mode="HTML", reply_markup=markup
+                )
         else:
-            await update.message.reply_text(html_text, parse_mode="HTML", reply_markup=reply_markup)
+            await update.message.reply_text(
+                html_text, parse_mode="HTML", reply_markup=reply_markup
+            )
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -165,12 +178,19 @@ class TelegramBot:
             await update.message.reply_text("⛔ Unauthorized.")
             return
         from heartbeat.jobs import load_jobs
+
         jobs = [j for j in load_jobs() if j.enabled]
         if not jobs:
-            await update.message.reply_text("No scheduled jobs configured.", reply_markup=_MAIN_KEYBOARD)
+            await update.message.reply_text(
+                "No scheduled jobs configured.", reply_markup=_MAIN_KEYBOARD
+            )
             return
         buttons = [
-            [InlineKeyboardButton(f"▶ {j.id}  ({j.schedule})", callback_data=f"run_job:{j.id}")]
+            [
+                InlineKeyboardButton(
+                    f"▶ {j.id}  ({j.schedule})", callback_data=f"run_job:{j.id}"
+                )
+            ]
             for j in jobs
         ]
         await update.message.reply_text(
@@ -178,7 +198,9 @@ class TelegramBot:
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
-    async def _handle_job_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def _handle_job_button(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         query = update.callback_query
         if not self._is_allowed(query.from_user.id):
             await query.answer("⛔ Unauthorized.")
@@ -192,11 +214,16 @@ class TelegramBot:
             return
         triggered = heartbeat.trigger_job(job_id)
         if triggered:
-            await query.edit_message_text(f"▶ Job <b>{job_id}</b> is running — result will arrive shortly.", parse_mode="HTML")
+            await query.edit_message_text(
+                f"▶ Job <b>{job_id}</b> is running — result will arrive shortly.",
+                parse_mode="HTML",
+            )
         else:
             await query.edit_message_text(f"⚠️ Job '{job_id}' not found.")
 
-    async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def _handle_document(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         """
         Handle an incoming file/document from the user.
 
@@ -225,7 +252,9 @@ class TelegramBot:
             await update.message.reply_text(f"⚠️ Could not download file: {e}")
             return
 
-        logger.info(f"File received from {user.username or user.id}: {filename} → {save_path}")
+        logger.info(
+            f"File received from {user.username or user.id}: {filename} → {save_path}"
+        )
 
         # Build a context message for the brain
         user_message = (
@@ -276,7 +305,10 @@ class TelegramBot:
         if update.message.voice:
             filename = f"voice_{audio_obj.file_unique_id}.ogg"
         else:
-            filename = getattr(audio_obj, "file_name", None) or f"audio_{audio_obj.file_unique_id}.ogg"
+            filename = (
+                getattr(audio_obj, "file_name", None)
+                or f"audio_{audio_obj.file_unique_id}.ogg"
+            )
 
         _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         save_path = _UPLOAD_DIR / filename
@@ -290,13 +322,16 @@ class TelegramBot:
             await update.message.reply_text(f"⚠️ Could not download audio: {e}")
             return
 
-        logger.info(f"Audio received from {user.username or user.id}: {filename} → {save_path}")
+        logger.info(
+            f"Audio received from {user.username or user.id}: {filename} → {save_path}"
+        )
 
         # Transcribe with Parakeet
         caption = update.message.caption or ""
         transcript: str | None = None
         try:
             from channels.transcribe import transcribe
+
             await update.message.chat.send_action("typing")
             transcript = await transcribe(save_path)
             logger.info(f"Transcribed ({filename}): {transcript[:120]}")
@@ -364,7 +399,9 @@ class TelegramBot:
         content: list = []
         if caption:
             content.append({"type": "text", "text": caption})
-        content.append({"type": "image", "media_type": "image/jpeg", "data": image_data})
+        content.append(
+            {"type": "image", "media_type": "image/jpeg", "data": image_data}
+        )
 
         user_id = str(user.id)
         history = self._history.load(user_id)
@@ -395,7 +432,9 @@ class TelegramBot:
         history = self._history.load(user_id)
 
         try:
-            response_text, updated_history = await self._stream_think(update, user_text, history)
+            response_text, updated_history = await self._stream_think(
+                update, user_text, history
+            )
             self._history.save(user_id, updated_history)
 
             # Send any files queued by the send_file tool
@@ -446,7 +485,9 @@ class TelegramBot:
         # Final edit: apply HTML formatting and attach keyboard
         final_html = md_to_html(response_text)
         try:
-            await placeholder.edit_text(final_html, parse_mode="HTML", reply_markup=_MAIN_KEYBOARD)
+            await placeholder.edit_text(
+                final_html, parse_mode="HTML", reply_markup=_MAIN_KEYBOARD
+            )
         except Exception:
             # If edit fails (e.g. message too long), fall back to a fresh reply
             await placeholder.delete()
@@ -459,6 +500,7 @@ class TelegramBot:
     async def _send_file(self, update: Update, path, caption: str) -> None:
         """Send a file to the user — as a photo if it's an image, document otherwise."""
         from pathlib import Path
+
         path = Path(path)
         if not path.exists():
             await update.message.reply_text(f"⚠️ File not found: {path.name}")
@@ -468,7 +510,9 @@ class TelegramBot:
                 if path.suffix.lower() in self._IMAGE_SUFFIXES:
                     await update.message.reply_photo(f, caption=caption or None)
                 else:
-                    await update.message.reply_document(f, caption=caption or None, filename=path.name)
+                    await update.message.reply_document(
+                        f, caption=caption or None, filename=path.name
+                    )
             logger.info(f"Sent file to user: {path.name}")
         except Exception as e:
             logger.error(f"Failed to send file {path.name}: {e}")
@@ -485,7 +529,9 @@ class TelegramBot:
         from pathlib import Path
 
         if not self._allowed_users:
-            logger.warning("push_message: TELEGRAM_ALLOWED_USERS is empty — nowhere to push")
+            logger.warning(
+                "push_message: TELEGRAM_ALLOWED_USERS is empty — nowhere to push"
+            )
             return
 
         for user_id in self._allowed_users:
@@ -493,18 +539,25 @@ class TelegramBot:
                 html_text = md_to_html(text)
                 for i in range(0, max(1, len(html_text)), 4096):
                     await self.app.bot.send_message(
-                        chat_id=user_id, text=html_text[i:i+4096], parse_mode="HTML"
+                        chat_id=user_id, text=html_text[i : i + 4096], parse_mode="HTML"
                     )
                 # Send any attached files
-                for path, caption in (files or []):
+                for path, caption in files or []:
                     path = Path(path)
                     if not path.exists():
                         continue
                     with open(path, "rb") as f:
                         if path.suffix.lower() in self._IMAGE_SUFFIXES:
-                            await self.app.bot.send_photo(chat_id=user_id, photo=f, caption=caption or None)
+                            await self.app.bot.send_photo(
+                                chat_id=user_id, photo=f, caption=caption or None
+                            )
                         else:
-                            await self.app.bot.send_document(chat_id=user_id, document=f, caption=caption or None, filename=path.name)
+                            await self.app.bot.send_document(
+                                chat_id=user_id,
+                                document=f,
+                                caption=caption or None,
+                                filename=path.name,
+                            )
             except Exception as e:
                 logger.error(f"push_message: failed to notify user {user_id}: {e}")
 

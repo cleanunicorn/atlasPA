@@ -16,7 +16,9 @@ class OpenAIProvider(BaseLLMProvider):
 
     def __init__(self):
         api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL", None)  # Optional: override for compatible APIs
+        base_url = os.getenv(
+            "OPENAI_BASE_URL", None
+        )  # Optional: override for compatible APIs
         self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = os.getenv("OPENAI_MODEL", "gpt-4o")
 
@@ -34,7 +36,9 @@ class OpenAIProvider(BaseLLMProvider):
     ) -> LLMResponse:
         """Send messages to OpenAI and return a unified LLMResponse."""
         openai_messages = self._build_messages(messages, system)
-        kwargs = dict(model=self._model, max_tokens=max_tokens, messages=openai_messages)
+        kwargs = dict(
+            model=self._model, max_tokens=max_tokens, messages=openai_messages
+        )
 
         if tools:
             kwargs["tools"] = [
@@ -66,11 +70,13 @@ class OpenAIProvider(BaseLLMProvider):
                     arguments = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     arguments = {}
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=arguments,
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=arguments,
+                    )
+                )
 
         stop_reason_map = {
             "stop": "end_turn",
@@ -109,7 +115,14 @@ class OpenAIProvider(BaseLLMProvider):
         )
         if tools:
             kwargs["tools"] = [
-                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
                 for t in tools
             ]
             kwargs["tool_choice"] = "auto"
@@ -158,9 +171,15 @@ class OpenAIProvider(BaseLLMProvider):
                 arguments = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError:
                 arguments = {}
-            tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], arguments=arguments))
+            tool_calls.append(
+                ToolCall(id=tc["id"], name=tc["name"], arguments=arguments)
+            )
 
-        stop_reason_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
+        stop_reason_map = {
+            "stop": "end_turn",
+            "tool_calls": "tool_use",
+            "length": "max_tokens",
+        }
         return LLMResponse(
             content="".join(content_parts) or None,
             tool_calls=tool_calls,
@@ -168,36 +187,57 @@ class OpenAIProvider(BaseLLMProvider):
             usage=usage,
         )
 
-    def _build_messages(self, messages: list[Message], system: str | None) -> list[dict]:
+    def _build_messages(
+        self, messages: list[Message], system: str | None
+    ) -> list[dict]:
         """Convert unified Messages to OpenAI format."""
         result = []
         if system:
             result.append({"role": "system", "content": system})
         for msg in messages:
             if msg.role == "tool":
-                result.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content})
+                result.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id,
+                        "content": msg.content,
+                    }
+                )
             elif msg.tool_calls:
-                result.append({
-                    "role": "assistant",
-                    "content": msg.content or None,
-                    "tool_calls": [
-                        {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}}
-                        for tc in msg.tool_calls
-                    ],
-                })
+                result.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content or None,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(tc["arguments"]),
+                                },
+                            }
+                            for tc in msg.tool_calls
+                        ],
+                    }
+                )
             elif isinstance(msg.content, list):
                 # Multimodal content (text + images)
                 openai_content = []
                 for block in msg.content:
                     if block.get("type") == "image":
-                        openai_content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{block['media_type']};base64,{block['data']}",
-                            },
-                        })
+                        openai_content.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{block['media_type']};base64,{block['data']}",
+                                },
+                            }
+                        )
                     else:
-                        openai_content.append({"type": "text", "text": block.get("text", "")})
+                        openai_content.append(
+                            {"type": "text", "text": block.get("text", "")}
+                        )
                 result.append({"role": msg.role, "content": openai_content})
             else:
                 result.append({"role": msg.role, "content": msg.content})

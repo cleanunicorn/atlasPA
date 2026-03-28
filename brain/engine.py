@@ -32,7 +32,7 @@ from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 
 from brain.status import AtlasCallback, drain_status
-from brain.tools import (                     # noqa: F401 — re-exported for tests
+from brain.tools import (  # noqa: F401 — re-exported for tests
     _TurnState,
     _run_skill_sync,
     _make_skill_tool,
@@ -59,14 +59,14 @@ _RESTART_DELAY = 2.0  # seconds before os.execv
 # ── Response sanitisation ────────────────────────────────────────────────────
 
 _TOOL_BLOCK_RE = re.compile(
-    r'<(?:tool_call|function_calls|parameter)\b[^>]*>.*?</(?:tool_call|function_calls|parameter)>',
+    r"<(?:tool_call|function_calls|parameter)\b[^>]*>.*?</(?:tool_call|function_calls|parameter)>",
     re.DOTALL | re.IGNORECASE,
 )
 _TOOL_TAG_RE = re.compile(
-    r'</?(?:tool_call|function_calls|function|parameter)\b[^>]*>',
+    r"</?(?:tool_call|function_calls|function|parameter)\b[^>]*>",
     re.IGNORECASE,
 )
-_MULTI_BLANK_RE = re.compile(r'\n{3,}')
+_MULTI_BLANK_RE = re.compile(r"\n{3,}")
 
 
 def _clean_response(text: str) -> str:
@@ -155,8 +155,10 @@ class Brain:
     Public interface is identical to the previous hand-rolled engine.
     """
 
-    def __init__(self, provider: BaseLLMProvider, memory: MemoryStore, skills: SkillRegistry):
-        self.provider = provider   # kept for extract() which calls provider directly
+    def __init__(
+        self, provider: BaseLLMProvider, memory: MemoryStore, skills: SkillRegistry
+    ):
+        self.provider = provider  # kept for extract() which calls provider directly
         self.memory = memory
         self.skills = skills
         self._pending_files: list[tuple[Path, str]] = []
@@ -222,12 +224,16 @@ class Brain:
             system += "\n\n---\n" + system_suffix
 
         history_str = _serialize_history(conversation_history)
-        messages = list(conversation_history) + [Message(role="user", content=user_message)]
+        messages = list(conversation_history) + [
+            Message(role="user", content=user_message)
+        ]
 
         tools = self._build_tools(state)
         react = dspy.ReAct(AtlasSignature, tools=tools, max_iters=MAX_ITERATIONS)
 
-        logger.info(f"DSPy ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})")
+        logger.info(
+            f"DSPy ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})"
+        )
 
         # Set up status drain if channel wants progress updates
         drain_task = None
@@ -246,7 +252,7 @@ class Brain:
         finally:
             if drain_task is not None:
                 self._status_callback.deactivate()
-                status_queue.put_nowait(None)   # sentinel to stop drain
+                status_queue.put_nowait(None)  # sentinel to stop drain
                 await drain_task
 
         # Sync per-turn state back to Brain
@@ -267,10 +273,13 @@ class Brain:
 
             def _do_restart():
                 import time
+
                 time.sleep(_RESTART_DELAY)
                 os.execv(sys.executable, [sys.executable] + sys.argv)
 
-            threading.Thread(target=_do_restart, daemon=True, name="atlas-reload").start()
+            threading.Thread(
+                target=_do_restart, daemon=True, name="atlas-reload"
+            ).start()
             return final_text, messages
 
         final_text = _clean_response(prediction.answer or "✅ Done.")

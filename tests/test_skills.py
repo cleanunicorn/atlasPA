@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 async def test_shell_exec_basic():
     """shell_exec returns stdout of a simple command."""
     from skills.shell_exec.tool import run
+
     result = await run("echo hello")
     assert "hello" in result
 
@@ -24,6 +25,7 @@ async def test_shell_exec_basic():
 async def test_shell_exec_nonzero_exit():
     """shell_exec includes the exit code when it's non-zero."""
     from skills.shell_exec.tool import run
+
     result = await run("exit 1", timeout=5)
     assert "1" in result  # exit code mentioned
 
@@ -32,6 +34,7 @@ async def test_shell_exec_nonzero_exit():
 async def test_shell_exec_timeout():
     """shell_exec returns a timeout error for commands that run too long."""
     from skills.shell_exec.tool import run
+
     result = await run("sleep 10", timeout=1)
     assert "timed out" in result.lower()
 
@@ -40,6 +43,7 @@ async def test_shell_exec_timeout():
 async def test_shell_exec_invalid_working_dir():
     """shell_exec returns an error for a non-existent working directory."""
     from skills.shell_exec.tool import run
+
     result = await run("echo hi", working_dir="/this/does/not/exist/ever")
     assert "does not exist" in result.lower() or "error" in result.lower()
 
@@ -48,6 +52,7 @@ async def test_shell_exec_invalid_working_dir():
 async def test_shell_exec_stderr_captured():
     """shell_exec captures stderr as well as stdout."""
     from skills.shell_exec.tool import run
+
     result = await run("python3 -c \"import sys; sys.stderr.write('err msg')\"")
     assert "err msg" in result
 
@@ -59,6 +64,7 @@ async def test_shell_exec_stderr_captured():
 async def test_code_runner_basic():
     """code_runner executes Python and returns stdout."""
     from skills.code_runner.tool import run
+
     result = await run("print('hello from python')")
     assert "hello from python" in result
 
@@ -67,6 +73,7 @@ async def test_code_runner_basic():
 async def test_code_runner_math():
     """code_runner can do arithmetic."""
     from skills.code_runner.tool import run
+
     result = await run("print(2 ** 10)")
     assert "1024" in result
 
@@ -75,6 +82,7 @@ async def test_code_runner_math():
 async def test_code_runner_exception():
     """code_runner returns the traceback on exception, not raises."""
     from skills.code_runner.tool import run
+
     result = await run("raise ValueError('oops')")
     assert "ValueError" in result
     assert "oops" in result
@@ -84,6 +92,7 @@ async def test_code_runner_exception():
 async def test_code_runner_timeout():
     """code_runner kills infinite loops after the timeout."""
     from skills.code_runner.tool import run
+
     result = await run("while True: pass", timeout=1)
     assert "timed out" in result.lower()
 
@@ -92,6 +101,7 @@ async def test_code_runner_timeout():
 async def test_code_runner_no_stdin():
     """code_runner doesn't hang waiting for stdin."""
     from skills.code_runner.tool import run
+
     # input() with closed stdin should raise EOFError immediately
     result = await run("x = input('enter: ')", timeout=5)
     assert "EOF" in result or "timed out" not in result.lower()
@@ -118,6 +128,7 @@ async def test_http_request_get(httpx_mock=None):
     mock_client.request = AsyncMock(return_value=mock_response)
 
     from skills.http_request.tool import run
+
     with patch("httpx.AsyncClient", return_value=mock_client):
         result = await run("https://example.com")
 
@@ -136,6 +147,7 @@ async def test_http_request_timeout():
     mock_client.request = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
 
     from skills.http_request.tool import run
+
     with patch("httpx.AsyncClient", return_value=mock_client):
         result = await run("https://example.com", timeout=1)
 
@@ -158,6 +170,7 @@ async def test_http_request_post_with_body():
     mock_client.request = AsyncMock(return_value=mock_response)
 
     from skills.http_request.tool import run
+
     with patch("httpx.AsyncClient", return_value=mock_client):
         result = await run(
             "https://api.example.com/items",
@@ -198,6 +211,7 @@ async def test_browser_read_page():
     mock_pw.chromium = mock_chromium
 
     from skills.browser.tool import run
+
     with patch("playwright.async_api.async_playwright", return_value=mock_pw):
         result = await run("https://example.com", action="read")
 
@@ -209,8 +223,12 @@ async def test_browser_read_page():
 async def test_browser_missing_playwright():
     """browser skill returns a helpful error if playwright is not installed."""
     from skills.browser.tool import run
+
     with patch.dict("sys.modules", {"playwright": None, "playwright.async_api": None}):
-        with patch("builtins.__import__", side_effect=ImportError("No module named 'playwright'")):
+        with patch(
+            "builtins.__import__",
+            side_effect=ImportError("No module named 'playwright'"),
+        ):
             result = await run("https://example.com")
     assert "playwright" in result.lower() or "error" in result.lower()
 
@@ -240,6 +258,7 @@ async def test_browser_extract_selector():
     mock_pw.chromium = mock_chromium
 
     from skills.browser.tool import run
+
     with patch("playwright.async_api.async_playwright", return_value=mock_pw):
         result = await run("https://example.com", action="extract", selector="li")
 

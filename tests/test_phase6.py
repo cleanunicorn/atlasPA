@@ -24,8 +24,11 @@ from brain.engine import _make_reflect, _make_create_plan, _make_ask_user, _Turn
 @pytest.fixture
 def empty_skills(tmp_path):
     from skills.registry import SkillRegistry
-    with patch("skills.registry.CORE_SKILLS_DIR", tmp_path / "core"), \
-         patch("skills.registry.ADDON_SKILLS_DIR", tmp_path / "addon"):
+
+    with (
+        patch("skills.registry.CORE_SKILLS_DIR", tmp_path / "core"),
+        patch("skills.registry.ADDON_SKILLS_DIR", tmp_path / "addon"),
+    ):
         (tmp_path / "core").mkdir()
         (tmp_path / "addon").mkdir()
         yield SkillRegistry()
@@ -34,6 +37,7 @@ def empty_skills(tmp_path):
 @pytest.fixture
 def tmp_memory(tmp_path):
     from memory.store import MemoryStore
+
     with patch("memory.store.MEMORY_DIR", tmp_path):
         yield MemoryStore()
 
@@ -66,12 +70,19 @@ async def test_ask_user_returns_question_immediately(tmp_memory, empty_skills):
         [
             LLMResponse(
                 content="",
-                tool_calls=[ToolCall(id="q1", name="ask_user", arguments={"question": "Which project?"})],
+                tool_calls=[
+                    ToolCall(
+                        id="q1",
+                        name="ask_user",
+                        arguments={"question": "Which project?"},
+                    )
+                ],
                 stop_reason="tool_use",
             ),
             LLMResponse(content="fallback", tool_calls=[]),
         ],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     text, messages = await brain.think("do the thing", [])
@@ -101,15 +112,22 @@ async def test_create_plan_stores_plan(tmp_memory, empty_skills):
         [
             LLMResponse(
                 content="",
-                tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
-                    "title": "My Plan",
-                    "steps": ["Step 1", "Step 2", "Step 3"],
-                })],
+                tool_calls=[
+                    ToolCall(
+                        id="p1",
+                        name="create_plan",
+                        arguments={
+                            "title": "My Plan",
+                            "steps": ["Step 1", "Step 2", "Step 3"],
+                        },
+                    )
+                ],
                 stop_reason="tool_use",
             ),
             LLMResponse(content="Plan executed.", tool_calls=[]),
         ],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     await brain.think("complex task", [])
@@ -128,15 +146,22 @@ async def test_create_plan_result_included_in_tool_messages(tmp_memory, empty_sk
         [
             LLMResponse(
                 content="",
-                tool_calls=[ToolCall(id="p1", name="create_plan", arguments={
-                    "title": "Task Plan",
-                    "steps": ["Do A", "Do B"],
-                })],
+                tool_calls=[
+                    ToolCall(
+                        id="p1",
+                        name="create_plan",
+                        arguments={
+                            "title": "Task Plan",
+                            "steps": ["Do A", "Do B"],
+                        },
+                    )
+                ],
                 stop_reason="tool_use",
             ),
             LLMResponse(content="ok", tool_calls=[]),
         ],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     _, messages = await brain.think("task", [])
@@ -157,8 +182,11 @@ def test_reflect_no_gaps():
 def test_reflect_with_gaps():
     """reflect with real gaps returns an 'address these' message."""
     tool = _make_reflect()
-    result = tool(goal="write and send a report", accomplished="wrote report",
-                  gaps="still need to send the email")
+    result = tool(
+        goal="write and send a report",
+        accomplished="wrote report",
+        gaps="still need to send the email",
+    )
     assert "still need to send the email" in result
 
 
@@ -168,14 +196,19 @@ def test_reflect_with_gaps():
 @pytest.mark.asyncio
 async def test_extract_parses_json(brain):
     """extract() returns a parsed dict from a JSON-mode provider response."""
-    brain.provider.complete = AsyncMock(return_value=LLMResponse(
-        content='{"name": "Alice", "age": 30}',
-        stop_reason="end_turn",
-    ))
+    brain.provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content='{"name": "Alice", "age": 30}',
+            stop_reason="end_turn",
+        )
+    )
 
     result = await brain.extract(
         text="Alice is 30 years old.",
-        schema={"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}},
+        schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+        },
     )
     assert result == {"name": "Alice", "age": 30}
     _, kwargs = brain.provider.complete.call_args
@@ -185,10 +218,12 @@ async def test_extract_parses_json(brain):
 @pytest.mark.asyncio
 async def test_extract_strips_markdown_fences(brain):
     """extract() handles models that wrap JSON in ```json fences."""
-    brain.provider.complete = AsyncMock(return_value=LLMResponse(
-        content='```json\n{"key": "value"}\n```',
-        stop_reason="end_turn",
-    ))
+    brain.provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content='```json\n{"key": "value"}\n```',
+            stop_reason="end_turn",
+        )
+    )
 
     result = await brain.extract("some text", {"type": "object"})
     assert result == {"key": "value"}
@@ -197,10 +232,12 @@ async def test_extract_strips_markdown_fences(brain):
 @pytest.mark.asyncio
 async def test_extract_raises_on_invalid_json(brain):
     """extract() raises ValueError if the model returns non-JSON."""
-    brain.provider.complete = AsyncMock(return_value=LLMResponse(
-        content="Here is the data: not json",
-        stop_reason="end_turn",
-    ))
+    brain.provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content="Here is the data: not json",
+            stop_reason="end_turn",
+        )
+    )
 
     with pytest.raises(ValueError, match="non-JSON"):
         await brain.extract("text", {"type": "object"})

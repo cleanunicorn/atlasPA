@@ -55,7 +55,9 @@ class ConversationHistory:
             data = json.loads(path.read_text(encoding="utf-8"))
             return [Message(**m) for m in data]
         except Exception as e:
-            logger.warning(f"Could not load history for {user_id}: {e} — starting fresh")
+            logger.warning(
+                f"Could not load history for {user_id}: {e} — starting fresh"
+            )
             return []
 
     @staticmethod
@@ -70,12 +72,14 @@ class ConversationHistory:
                         stripped.append({"type": "text", "text": "[image attached]"})
                     else:
                         stripped.append(block)
-                result.append(Message(
-                    role=msg.role,
-                    content=stripped,
-                    tool_call_id=msg.tool_call_id,
-                    tool_calls=msg.tool_calls,
-                ))
+                result.append(
+                    Message(
+                        role=msg.role,
+                        content=stripped,
+                        tool_call_id=msg.tool_call_id,
+                        tool_calls=msg.tool_calls,
+                    )
+                )
             else:
                 result.append(msg)
         return result
@@ -91,7 +95,9 @@ class ConversationHistory:
 
         messages = self._strip_images(messages)
         path = self._path(user_id)
-        payload = json.dumps([asdict(m) for m in messages], indent=2, ensure_ascii=False)
+        payload = json.dumps(
+            [asdict(m) for m in messages], indent=2, ensure_ascii=False
+        )
 
         # Atomic write: write to temp file in same dir, then rename
         try:

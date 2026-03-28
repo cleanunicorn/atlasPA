@@ -33,11 +33,12 @@ def _safe_log_path(filename: str) -> Path:
         raise HTTPException(400, "Invalid log file name")
     return path
 
+
 # ── File index ─────────────────────────────────────────────────────────────────
 # For each log file we build a byte-offset index so we can seek to any line
 # in O(1) without loading the whole file into memory.
 
-_index_cache: dict[str, list[int]] = {}   # path → list of byte offsets
+_index_cache: dict[str, list[int]] = {}  # path → list of byte offsets
 _index_lock = threading.Lock()
 
 
@@ -66,7 +67,7 @@ def _get_index(path: Path) -> list[int]:
 def _read_entry(path: Path, line_no: int) -> dict:
     offsets = _get_index(path)
     if line_no < 0 or line_no >= len(offsets):
-        raise IndexError(f"line {line_no} out of range (0–{len(offsets)-1})")
+        raise IndexError(f"line {line_no} out of range (0–{len(offsets) - 1})")
     with path.open("rb") as f:
         f.seek(offsets[line_no])
         return json.loads(f.readline())
@@ -85,11 +86,14 @@ async def root():
 
 # ── API ────────────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/files")
 async def list_files():
     if not LOG_DIR.exists():
         return {"files": []}
-    files = sorted(LOG_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        LOG_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     result = []
     for f in files:
         try:
@@ -145,17 +149,21 @@ async def list_entries(
             except json.JSONDecodeError:
                 continue
             # Return only summary fields for the list view
-            entries.append({
-                "line": i,
-                "ts": entry.get("ts"),
-                "provider": entry.get("provider"),
-                "model": entry.get("model"),
-                "stop_reason": entry.get("response", {}).get("stop_reason"),
-                "usage": entry.get("response", {}).get("usage", {}),
-                "n_messages": len(entry.get("request", {}).get("messages", [])),
-                "n_tool_calls": len(entry.get("response", {}).get("tool_calls", [])),
-                "has_content": bool(entry.get("response", {}).get("content")),
-            })
+            entries.append(
+                {
+                    "line": i,
+                    "ts": entry.get("ts"),
+                    "provider": entry.get("provider"),
+                    "model": entry.get("model"),
+                    "stop_reason": entry.get("response", {}).get("stop_reason"),
+                    "usage": entry.get("response", {}).get("usage", {}),
+                    "n_messages": len(entry.get("request", {}).get("messages", [])),
+                    "n_tool_calls": len(
+                        entry.get("response", {}).get("tool_calls", [])
+                    ),
+                    "has_content": bool(entry.get("response", {}).get("content")),
+                }
+            )
 
     return {
         "total": filtered_total,

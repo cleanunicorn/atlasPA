@@ -79,7 +79,9 @@ class EmbeddingCache:
             try:
                 self._store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             except Exception as exc:
-                logger.warning(f"EmbeddingCache: could not load ({exc}), starting fresh")
+                logger.warning(
+                    f"EmbeddingCache: could not load ({exc}), starting fresh"
+                )
                 self._store = {}
 
 

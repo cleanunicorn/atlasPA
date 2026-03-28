@@ -79,10 +79,24 @@ async def test_scheduler_loads_enabled_jobs(tmp_path):
     from heartbeat.scheduler import Scheduler
 
     jobs_file = tmp_path / "jobs.json"
-    jobs_file.write_text(json.dumps([
-        {"id": "active", "schedule": "0 8 * * *", "prompt": "Hi", "enabled": True},
-        {"id": "inactive", "schedule": "0 9 * * *", "prompt": "Bye", "enabled": False},
-    ]))
+    jobs_file.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "active",
+                    "schedule": "0 8 * * *",
+                    "prompt": "Hi",
+                    "enabled": True,
+                },
+                {
+                    "id": "inactive",
+                    "schedule": "0 9 * * *",
+                    "prompt": "Bye",
+                    "enabled": False,
+                },
+            ]
+        )
+    )
 
     mock_brain = MagicMock()
     sched = Scheduler(brain=mock_brain, notify_callback=None)
@@ -114,7 +128,8 @@ async def test_scheduler_run_job_calls_notify(tmp_memory, empty_skills):
 
     brain, _ = make_brain(
         [LLMResponse(content="Good morning!", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     hb = Heartbeat(brain=brain, notify_callback=mock_notify)
@@ -153,21 +168,30 @@ async def test_schedule_job_tool_creates_job(tmp_path, tmp_memory, empty_skills)
         [
             LLMResponse(
                 content=None,
-                tool_calls=[ToolCall(id="tc1", name="schedule_job", arguments={
-                    "job_id": "daily_check",
-                    "schedule": "0 9 * * 1-5",
-                    "prompt": "Daily standup reminder",
-                })],
+                tool_calls=[
+                    ToolCall(
+                        id="tc1",
+                        name="schedule_job",
+                        arguments={
+                            "job_id": "daily_check",
+                            "schedule": "0 9 * * 1-5",
+                            "prompt": "Daily standup reminder",
+                        },
+                    )
+                ],
                 stop_reason="tool_use",
             ),
             LLMResponse(content="Job scheduled!", tool_calls=[]),
         ],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
     brain.heartbeat = mock_heartbeat
 
     with patch("heartbeat.jobs.JOBS_FILE", tmp_path / "jobs.json"):
-        response, _ = await brain.think("Schedule a daily reminder", conversation_history=[])
+        response, _ = await brain.think(
+            "Schedule a daily reminder", conversation_history=[]
+        )
         jobs = load_jobs()
 
     assert any(j.id == "daily_check" for j in jobs)
@@ -192,10 +216,13 @@ async def test_list_jobs_tool(tmp_path, tmp_memory, empty_skills):
                 ),
                 LLMResponse(content="Here are your jobs.", tool_calls=[]),
             ],
-            tmp_memory, empty_skills,
+            tmp_memory,
+            empty_skills,
         )
 
-        _, history = await brain.think("Show my scheduled jobs", conversation_history=[])
+        _, history = await brain.think(
+            "Show my scheduled jobs", conversation_history=[]
+        )
 
     tool_result = next(m for m in history if m.role == "tool")
     assert "briefing" in tool_result.content
@@ -214,12 +241,19 @@ async def test_delete_job_tool(tmp_path, tmp_memory, empty_skills):
             [
                 LLMResponse(
                     content=None,
-                    tool_calls=[ToolCall(id="tc3", name="delete_job", arguments={"job_id": "to_delete"})],
+                    tool_calls=[
+                        ToolCall(
+                            id="tc3",
+                            name="delete_job",
+                            arguments={"job_id": "to_delete"},
+                        )
+                    ],
                     stop_reason="tool_use",
                 ),
                 LLMResponse(content="Job deleted.", tool_calls=[]),
             ],
-            tmp_memory, empty_skills,
+            tmp_memory,
+            empty_skills,
         )
 
         await brain.think("Delete the to_delete job", conversation_history=[])
@@ -243,7 +277,8 @@ async def test_awareness_no_action_does_not_notify(tmp_memory, empty_skills, tmp
 
     brain, _ = make_brain(
         [LLMResponse(content="NO_ACTION", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     with patch("heartbeat.awareness.LOG_FILE", tmp_path / "awareness_log.json"):
@@ -265,7 +300,8 @@ async def test_awareness_triggered_calls_notify(tmp_memory, empty_skills, tmp_pa
 
     brain, _ = make_brain(
         [LLMResponse(content="Don't forget your meeting at 3pm!", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     with patch("heartbeat.awareness.LOG_FILE", tmp_path / "awareness_log.json"):
@@ -285,7 +321,8 @@ async def test_awareness_logs_entries(tmp_memory, empty_skills, tmp_path):
     log_file = tmp_path / "awareness_log.json"
     brain, _ = make_brain(
         [LLMResponse(content="NO_ACTION", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
 
     with patch("heartbeat.awareness.LOG_FILE", log_file):
@@ -311,7 +348,9 @@ async def test_awareness_failure_doesnt_crash(tmp_memory, empty_skills, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_wrapper_starts_both_components(tmp_memory, empty_skills, tmp_path):
+async def test_heartbeat_wrapper_starts_both_components(
+    tmp_memory, empty_skills, tmp_path
+):
     """Heartbeat facade starts both Scheduler and Awareness."""
     from heartbeat import Heartbeat
 

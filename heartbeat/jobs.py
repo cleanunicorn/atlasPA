@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Job:
     """A scheduled task that the heartbeat runs autonomously."""
+
     id: str
-    schedule: str        # Cron expression or ISO datetime string
-    prompt: str          # Forwarded to brain.think() when the job fires
+    schedule: str  # Cron expression or ISO datetime string
+    prompt: str  # Forwarded to brain.think() when the job fires
     enabled: bool = True
 
 

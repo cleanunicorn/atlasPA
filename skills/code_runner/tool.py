@@ -43,7 +43,9 @@ async def run(code: str, timeout: int = 15, **kwargs) -> str:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", code,
+            sys.executable,
+            "-c",
+            code,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             stdin=asyncio.subprocess.DEVNULL,  # No interactive prompts

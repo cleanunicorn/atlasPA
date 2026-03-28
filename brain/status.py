@@ -27,27 +27,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StatusUpdate:
-    message: str        # Human-readable, e.g. "Searching the web..."
-    phase: str          # "lm_start", "tool_start"
+    message: str  # Human-readable, e.g. "Searching the web..."
+    phase: str  # "lm_start", "tool_start"
     tool_name: str = ""
 
 
 # ── Tool → human label ──────────────────────────────────────────────────────
 
 _TOOL_LABELS: dict[str, str | None] = {
-    "remember":      "Saving to memory",
-    "forget":        "Updating memory",
-    "set_location":  "Updating location",
-    "send_file":     "Preparing file",
-    "schedule_job":  "Scheduling job",
-    "list_jobs":     "Checking jobs",
-    "delete_job":    "Deleting job",
-    "ask_user":      None,           # suppress — user will see the question
-    "create_plan":   "Planning",
-    "reflect":       "Reflecting",
-    "reload":        "Restarting",
+    "remember": "Saving to memory",
+    "forget": "Updating memory",
+    "set_location": "Updating location",
+    "send_file": "Preparing file",
+    "schedule_job": "Scheduling job",
+    "list_jobs": "Checking jobs",
+    "delete_job": "Deleting job",
+    "ask_user": None,  # suppress — user will see the question
+    "create_plan": "Planning",
+    "reflect": "Reflecting",
+    "reload": "Restarting",
     "manage_skills": "Managing skills",
-    "finish":        "Wrapping up",  # DSPy internal
+    "finish": "Wrapping up",  # DSPy internal
 }
 
 

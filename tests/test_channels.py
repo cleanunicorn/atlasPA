@@ -20,7 +20,8 @@ from tests.test_brain import MockProvider, make_brain, empty_skills, tmp_memory
 def discord_brain(tmp_memory, empty_skills):
     brain, _ = make_brain(
         [LLMResponse(content="Hello from Discord!", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
     return brain
 
@@ -32,6 +33,7 @@ def make_discord_bot(brain):
         with patch("channels.discord.bot.discord.Client"):
             with patch("channels.discord.bot.app_commands.CommandTree"):
                 from channels.discord.bot import DiscordBot
+
                 bot = DiscordBot(brain=brain)
     return bot
 
@@ -42,19 +44,24 @@ def test_discord_bot_requires_token(discord_brain):
         with patch("channels.discord.bot.discord.Client"):
             with patch("channels.discord.bot.app_commands.CommandTree"):
                 from channels.discord.bot import DiscordBot
+
                 with pytest.raises(ValueError, match="DISCORD_BOT_TOKEN"):
                     DiscordBot(brain=discord_brain)
 
 
 def test_discord_bot_allowed_users_parsing(discord_brain):
     """DISCORD_ALLOWED_USERS env var is correctly parsed into a set of ints."""
-    with patch.dict("os.environ", {
-        "DISCORD_BOT_TOKEN": "fake",
-        "DISCORD_ALLOWED_USERS": "111,222, 333",
-    }):
+    with patch.dict(
+        "os.environ",
+        {
+            "DISCORD_BOT_TOKEN": "fake",
+            "DISCORD_ALLOWED_USERS": "111,222, 333",
+        },
+    ):
         with patch("channels.discord.bot.discord.Client"):
             with patch("channels.discord.bot.app_commands.CommandTree"):
                 from channels.discord.bot import DiscordBot
+
                 bot = DiscordBot(brain=discord_brain)
     assert bot._allowed_users == {111, 222, 333}
 
@@ -121,6 +128,7 @@ async def test_discord_send_file_missing_replies_error(tmp_path):
 def make_web_bot(brain):
     """Create a WebBot without starting uvicorn."""
     from channels.web.bot import WebBot
+
     return WebBot(brain=brain, host="127.0.0.1", port=9999)
 
 
@@ -129,17 +137,20 @@ async def test_web_bot_sends_text_response(tmp_memory, empty_skills):
     """WebSocket handler returns a JSON text message after brain.think()."""
     brain, _ = make_brain(
         [LLMResponse(content="Web says hi!", tool_calls=[])],
-        tmp_memory, empty_skills,
+        tmp_memory,
+        empty_skills,
     )
     bot = make_web_bot(brain)
 
     sent = []
 
     mock_ws = AsyncMock()
-    mock_ws.receive_json = AsyncMock(side_effect=[
-        {"message": "Hello"},
-        Exception("stop"),  # ends the loop
-    ])
+    mock_ws.receive_json = AsyncMock(
+        side_effect=[
+            {"message": "Hello"},
+            Exception("stop"),  # ends the loop
+        ]
+    )
 
     async def capture_send(data):
         sent.append(data)
@@ -147,13 +158,17 @@ async def test_web_bot_sends_text_response(tmp_memory, empty_skills):
     mock_ws.send_json = AsyncMock(side_effect=capture_send)
 
     # Grab the ws handler from the FastAPI routes
-    ws_route = next(r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}")
+    ws_route = next(
+        r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}"
+    )
     try:
         await ws_route.endpoint(mock_ws, session_id="test-session")
     except Exception:
         pass
 
-    assert any(m.get("type") == "text" and "Web says hi!" in m.get("content", "") for m in sent)
+    assert any(
+        m.get("type") == "text" and "Web says hi!" in m.get("content", "") for m in sent
+    )
 
 
 @pytest.mark.asyncio
@@ -164,13 +179,17 @@ async def test_web_bot_clear_command(tmp_memory, empty_skills):
 
     sent = []
     mock_ws = AsyncMock()
-    mock_ws.receive_json = AsyncMock(side_effect=[
-        {"message": "/clear"},
-        Exception("stop"),
-    ])
+    mock_ws.receive_json = AsyncMock(
+        side_effect=[
+            {"message": "/clear"},
+            Exception("stop"),
+        ]
+    )
     mock_ws.send_json = AsyncMock(side_effect=lambda d: sent.append(d))
 
-    ws_route = next(r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}")
+    ws_route = next(
+        r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}"
+    )
     try:
         await ws_route.endpoint(mock_ws, session_id="clear-test")
     except Exception:
@@ -189,13 +208,17 @@ async def test_web_bot_error_returned_as_json(tmp_memory, empty_skills):
 
     sent = []
     mock_ws = AsyncMock()
-    mock_ws.receive_json = AsyncMock(side_effect=[
-        {"message": "Hello"},
-        Exception("stop"),
-    ])
+    mock_ws.receive_json = AsyncMock(
+        side_effect=[
+            {"message": "Hello"},
+            Exception("stop"),
+        ]
+    )
     mock_ws.send_json = AsyncMock(side_effect=lambda d: sent.append(d))
 
-    ws_route = next(r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}")
+    ws_route = next(
+        r for r in bot.app.routes if getattr(r, "path", "") == "/ws/{session_id}"
+    )
     try:
         await ws_route.endpoint(mock_ws, session_id="err-session")
     except Exception:
@@ -222,6 +245,7 @@ def test_web_ui_html_is_served(tmp_memory, empty_skills):
 async def test_web_push_message_logs(tmp_memory, empty_skills, caplog):
     """push_message on WebBot logs but does not raise."""
     import logging
+
     brain, _ = make_brain([], tmp_memory, empty_skills)
     bot = make_web_bot(brain)
 

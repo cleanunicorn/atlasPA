@@ -32,6 +32,7 @@ from heartbeat.jobs import Job, load_jobs
 
 logger = logging.getLogger(__name__)
 
+
 def _build_job_note(job_id: str, schedule: str) -> str:
     """Build a per-job system-prompt suffix with context and behavioural rules."""
     return (
@@ -100,6 +101,7 @@ class Scheduler:
         job = jobs[job_id]
         import uuid
         from datetime import timezone as _tz
+
         self._scheduler.add_job(
             self._run_job,
             trigger=DateTrigger(run_date=datetime.now(_tz.utc)),
@@ -131,7 +133,9 @@ class Scheduler:
         """Register a single job with APScheduler."""
         trigger = self._make_trigger(job.schedule)
         if trigger is None:
-            logger.warning(f"Job '{job.id}': invalid schedule '{job.schedule}' — skipped")
+            logger.warning(
+                f"Job '{job.id}': invalid schedule '{job.schedule}' — skipped"
+            )
             return
         self._scheduler.add_job(
             self._run_job,
@@ -185,7 +189,9 @@ class Scheduler:
             if self.notify_callback:
                 await self.notify_callback(response, files)
             else:
-                logger.info(f"Job '{job_id}' response (no notify_callback): {response[:200]}")
+                logger.info(
+                    f"Job '{job_id}' response (no notify_callback): {response[:200]}"
+                )
 
         except Exception as e:
             logger.exception(f"Job '{job_id}' failed: {e}")

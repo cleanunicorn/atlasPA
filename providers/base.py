@@ -14,23 +14,26 @@ from typing import Any
 @dataclass
 class Message:
     """A single message in a conversation."""
-    role: str          # "system" | "user" | "assistant" | "tool"
+
+    role: str  # "system" | "user" | "assistant" | "tool"
     content: str | list  # str for text; list of blocks for multimodal (text + images)
-    tool_call_id: str | None = None   # for tool result messages
+    tool_call_id: str | None = None  # for tool result messages
     tool_calls: list[dict] | None = None  # for assistant tool call messages
 
 
 @dataclass
 class ToolDefinition:
     """Describes a tool the LLM can call."""
+
     name: str
     description: str
-    parameters: dict   # JSON Schema object
+    parameters: dict  # JSON Schema object
 
 
 @dataclass
 class ToolCall:
     """A tool invocation requested by the LLM."""
+
     id: str
     name: str
     arguments: dict
@@ -39,7 +42,8 @@ class ToolCall:
 @dataclass
 class LLMResponse:
     """Unified response object returned by all providers."""
-    content: str | None           # Text response (None if tool call only)
+
+    content: str | None  # Text response (None if tool call only)
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"  # "end_turn" | "tool_use" | "max_tokens"
     usage: dict[str, int] = field(default_factory=dict)

@@ -142,7 +142,9 @@ class SkillRegistry:
                 )
                 continue
 
-            skill = Skill(name=name, description=description, path=skill_dir, source=source)
+            skill = Skill(
+                name=name, description=description, path=skill_dir, source=source
+            )
             self._skills[name] = skill
             logger.info(f"Registered {source} skill: {name}")
 
@@ -184,7 +186,8 @@ class SkillRegistry:
 
         # Must have a run() function
         has_run = any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run"
             for node in ast.walk(tree)
         )
         if not has_run:

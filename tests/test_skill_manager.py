@@ -26,6 +26,7 @@ MINIMAL_SKILL_MD = "# echo\n\nEchoes back the input message."
 def make_registry(tmp_path: Path):
     """Return a SkillRegistry that only scans tmp_path as both core and addon dir."""
     from skills.registry import SkillRegistry, CORE_SKILLS_DIR, ADDON_SKILLS_DIR
+
     registry = SkillRegistry.__new__(SkillRegistry)
     registry._skills = {}
 
@@ -43,6 +44,7 @@ def make_registry(tmp_path: Path):
 
 
 # ── install ────────────────────────────────────────────────────────────────────
+
 
 def test_install_writes_files(tmp_path):
     from skills.registry import SkillRegistry
@@ -163,6 +165,7 @@ def test_install_cannot_overwrite_core(tmp_path):
 
 # ── uninstall ──────────────────────────────────────────────────────────────────
 
+
 def test_uninstall_removes_skill(tmp_path):
     from skills.registry import SkillRegistry
 
@@ -228,6 +231,7 @@ def test_uninstall_core_skill_blocked(tmp_path):
 
 # ── get_skills_summary ─────────────────────────────────────────────────────────
 
+
 def test_skills_summary_groups_by_source(tmp_path):
     from skills.registry import SkillRegistry
 
@@ -268,9 +272,16 @@ def test_brain_manage_skills_install():
     mock_skills.install.return_value = "✅ Addon skill 'echo' installed successfully."
 
     tool = _make_manage_skills(mock_skills)
-    result = tool(action="install", name="echo", skill_md=MINIMAL_SKILL_MD, tool_py=MINIMAL_TOOL_PY)
+    result = tool(
+        action="install",
+        name="echo",
+        skill_md=MINIMAL_SKILL_MD,
+        tool_py=MINIMAL_TOOL_PY,
+    )
 
-    mock_skills.install.assert_called_once_with("echo", MINIMAL_SKILL_MD, MINIMAL_TOOL_PY)
+    mock_skills.install.assert_called_once_with(
+        "echo", MINIMAL_SKILL_MD, MINIMAL_TOOL_PY
+    )
     assert "✅" in result
 
 

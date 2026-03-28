@@ -33,19 +33,22 @@ logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-_PARAKEET_URL   = os.getenv("PARAKEET_URL",   "http://localhost:8765")
+_PARAKEET_URL = os.getenv("PARAKEET_URL", "http://localhost:8765")
 _PARAKEET_IMAGE = os.getenv("PARAKEET_IMAGE", "nvcr.io/nvidia/nemo:25.11.01")
 _CONTAINER_NAME = "atlas_parakeet"
-_TRANSCRIBE_SERVER_DIR = (Path(__file__).parent.parent.parent / "transcribe_server").resolve()
+_TRANSCRIBE_SERVER_DIR = (
+    Path(__file__).parent.parent.parent / "transcribe_server"
+).resolve()
 
 _parsed_url = urlparse(_PARAKEET_URL)
 _PARAKEET_PORT = _parsed_url.port or 8765
 
-_HTTP_TIMEOUT    = 120   # seconds per transcription request
-_STARTUP_TIMEOUT = 180   # seconds to wait for model to load on first start
+_HTTP_TIMEOUT = 120  # seconds per transcription request
+_STARTUP_TIMEOUT = 180  # seconds to wait for model to load on first start
 
 
 # ── Audio conversion ──────────────────────────────────────────────────────────
+
 
 def _to_wav(src: Path) -> Path:
     """
@@ -74,6 +77,7 @@ def _to_wav(src: Path) -> Path:
 
 # ── Docker management ─────────────────────────────────────────────────────────
 
+
 async def _check_server() -> bool:
     """Return True if the Parakeet HTTP server is reachable and healthy."""
     try:
@@ -84,7 +88,13 @@ async def _check_server() -> bool:
         return False
 
 
-_GPU_ERROR_HINTS = ("nvidia", "runc", "OCI runtime", "nvidia-persistenced", "no such file or directory")
+_GPU_ERROR_HINTS = (
+    "nvidia",
+    "runc",
+    "OCI runtime",
+    "nvidia-persistenced",
+    "no such file or directory",
+)
 
 
 async def _run_docker(cmd: list[str]) -> tuple[int, str, str]:
@@ -113,14 +123,17 @@ async def _start_container() -> None:
     Raises RuntimeError if Docker is not available or the run command fails.
     """
     base_cmd = [
-        "docker", "run",
-        "--rm", "--detach",
+        "docker",
+        "run",
+        "--rm",
+        "--detach",
         "--shm-size=8g",
         f"--volume={_TRANSCRIBE_SERVER_DIR}:/transcribe_server:ro",
         f"--publish={_PARAKEET_PORT}:{_PARAKEET_PORT}",
         f"--name={_CONTAINER_NAME}",
         _PARAKEET_IMAGE,
-        "python", "/transcribe_server/server.py",
+        "python",
+        "/transcribe_server/server.py",
     ]
 
     # Try with GPU first
@@ -158,8 +171,7 @@ async def _ensure_server_running() -> None:
         return
 
     logger.info(
-        f"Parakeet server not running — starting Docker container "
-        f"({_PARAKEET_IMAGE})…"
+        f"Parakeet server not running — starting Docker container ({_PARAKEET_IMAGE})…"
     )
     await _start_container()
 
@@ -180,6 +192,7 @@ async def _ensure_server_running() -> None:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 async def transcribe(audio_path: Path) -> str:
     """

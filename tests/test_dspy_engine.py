@@ -128,8 +128,11 @@ def test_serialize_history_user_and_assistant():
 
 def test_serialize_history_tool_calls_summarised():
     messages = [
-        Message(role="assistant", content=None,
-                tool_calls=[{"name": "skill_web_search"}, {"name": "remember"}]),
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[{"name": "skill_web_search"}, {"name": "remember"}],
+        ),
     ]
     result = _serialize_history(messages)
     assert "skill_web_search" in result
@@ -146,10 +149,13 @@ def test_serialize_history_tool_results_omitted():
 
 def test_serialize_history_multimodal_user_message():
     messages = [
-        Message(role="user", content=[
-            {"type": "text", "text": "Look at this"},
-            {"type": "image", "data": "base64data"},
-        ]),
+        Message(
+            role="user",
+            content=[
+                {"type": "text", "text": "Look at this"},
+                {"type": "image", "data": "base64data"},
+            ],
+        ),
     ]
     result = _serialize_history(messages)
     assert "User: Look at this" in result
@@ -314,13 +320,17 @@ def test_create_plan_updates_state():
 
 def test_reflect_no_gaps():
     tool = _make_reflect()
-    result = tool.func(goal="answer the question", accomplished="answered it", gaps="none")
+    result = tool.func(
+        goal="answer the question", accomplished="answered it", gaps="none"
+    )
     assert "all steps done" in result.lower()
 
 
 def test_reflect_with_gaps():
     tool = _make_reflect()
-    result = tool.func(goal="search and summarise", accomplished="searched", gaps="summary missing")
+    result = tool.func(
+        goal="search and summarise", accomplished="searched", gaps="summary missing"
+    )
     assert "summary missing" in result
 
 
@@ -365,6 +375,7 @@ async def test_history_passed_through(brain):
 @pytest.mark.asyncio
 async def test_ask_user_stops_loop_and_returns_question(brain):
     """When ask_user tool is called, think() returns the clarification question."""
+
     # Simulate ask_user being called during the ReAct run
     def react_that_asks(*args, **kwargs):
         # Side-effect: set clarification on the state captured by the tool
@@ -468,7 +479,9 @@ async def test_take_files_clears_queue(brain, tmp_path):
 @pytest.mark.asyncio
 async def test_extract_uses_provider_directly(brain):
     """extract() bypasses DSPy and calls provider.complete() with json_mode=True."""
-    brain.provider = MockProvider([LLMResponse(content='{"name": "Atlas"}', tool_calls=[])])
+    brain.provider = MockProvider(
+        [LLMResponse(content='{"name": "Atlas"}', tool_calls=[])]
+    )
     result = await brain.extract("My name is Atlas", schema={"type": "object"})
     assert result == {"name": "Atlas"}
 
@@ -551,7 +564,9 @@ async def test_drain_status_calls_on_status():
         received.append(msg)
 
     queue.put_nowait(StatusUpdate("Thinking...", "lm_start"))
-    queue.put_nowait(StatusUpdate("Using web search...", "tool_start", "skill_web_search"))
+    queue.put_nowait(
+        StatusUpdate("Using web search...", "tool_start", "skill_web_search")
+    )
     queue.put_nowait(None)  # sentinel
 
     await drain_status(queue, on_status)

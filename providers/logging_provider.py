@@ -56,7 +56,9 @@ class LoggingProvider(BaseLLMProvider):
     ) -> LLMResponse:
         ts = datetime.now(timezone.utc).isoformat()
 
-        response = await self._inner.complete(messages, tools, system, max_tokens, json_mode)
+        response = await self._inner.complete(
+            messages, tools, system, max_tokens, json_mode
+        )
 
         entry = {
             "ts": ts,
@@ -95,7 +97,9 @@ class LoggingProvider(BaseLLMProvider):
     ) -> LLMResponse:
         """Stream via inner provider; log the completed response afterward."""
         ts = datetime.now(timezone.utc).isoformat()
-        response = await self._inner.stream(messages, tools, system, max_tokens, on_token)
+        response = await self._inner.stream(
+            messages, tools, system, max_tokens, on_token
+        )
         entry = {
             "ts": ts,
             "provider": type(self._inner).__name__,

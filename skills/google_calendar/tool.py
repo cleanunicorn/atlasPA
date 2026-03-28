@@ -33,6 +33,7 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 from paths import CONFIG_DIR as _CONFIG_DIR
+
 _ACCOUNTS_FILE = _CONFIG_DIR / "google_accounts.json"
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -148,6 +149,7 @@ PARAMETERS = {
 
 # ── Account config ─────────────────────────────────────────────────────────────
 
+
 def _load_account_configs() -> list[dict]:
     """
     Return a list of account dicts, each with:
@@ -170,10 +172,14 @@ def _load_account_configs() -> list[dict]:
                 continue
             creds_file = _CONFIG_DIR / creds_filename
             token_file = _CONFIG_DIR / f"google_token_{name}.json"
-            accounts.append({"name": name, "creds_file": creds_file, "token_file": token_file})
+            accounts.append(
+                {"name": name, "creds_file": creds_file, "token_file": token_file}
+            )
 
         if not accounts:
-            raise ValueError("config/google_accounts.json exists but contains no valid entries.")
+            raise ValueError(
+                "config/google_accounts.json exists but contains no valid entries."
+            )
         return accounts
 
     # Legacy single-account fallback
@@ -183,6 +189,7 @@ def _load_account_configs() -> list[dict]:
 
 
 # ── Auth helper ────────────────────────────────────────────────────────────────
+
 
 def _get_service(account: dict):
     """Return an authenticated Google Calendar service for one account."""
@@ -255,6 +262,7 @@ def _get_services(account_name: str) -> list[tuple[str, object]]:
 
 # ── Date helpers ───────────────────────────────────────────────────────────────
 
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -296,9 +304,9 @@ def _label(account_name: str, calendar_name: str, multi_account: bool) -> str:
 
 
 _RSVP_EMOJI = {
-    "accepted":    "✅",
-    "declined":    "❌",
-    "tentative":   "❓",
+    "accepted": "✅",
+    "declined": "❌",
+    "tentative": "❓",
     "needsAction": "📨",
 }
 
@@ -317,7 +325,11 @@ def _fmt_event(event: dict) -> str:
     dt_str = start.get("dateTime", start.get("date", "?"))
     try:
         dt = datetime.fromisoformat(dt_str)
-        dt_str = dt.strftime("%a %d %b %Y, %H:%M") if "T" in dt_str else dt.strftime("%a %d %b %Y")
+        dt_str = (
+            dt.strftime("%a %d %b %Y, %H:%M")
+            if "T" in dt_str
+            else dt.strftime("%a %d %b %Y")
+        )
     except Exception:
         pass
 
@@ -356,6 +368,7 @@ def _fmt_event(event: dict) -> str:
 
 # ── Helpers for gathering events across accounts ────────────────────────────────
 
+
 def _gather_timed_events(
     services: list[tuple[str, object]],
     time_min: str,
@@ -381,16 +394,21 @@ def _gather_timed_events(
         seen_in_account: set[str] = set()
         for cal in cal_list:
             try:
-                result = svc.events().list(
-                    calendarId=cal["id"],
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    maxResults=max_results,
-                    singleEvents=True,
-                    orderBy="startTime",
-                ).execute()
+                result = (
+                    svc.events()
+                    .list(
+                        calendarId=cal["id"],
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        maxResults=max_results,
+                        singleEvents=True,
+                        orderBy="startTime",
+                    )
+                    .execute()
+                )
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     "Failed to gather events for calendar %s: %s", cal.get("id"), e
                 )
@@ -418,6 +436,7 @@ def _gather_timed_events(
 
 
 # ── Actions ────────────────────────────────────────────────────────────────────
+
 
 def _setup_account(credentials_path: str, account_name: str) -> str:
     """
@@ -495,8 +514,14 @@ def _setup_account(credentials_path: str, account_name: str) -> str:
 def _list_accounts(configs: list[dict]) -> str:
     lines = ["Configured Google accounts:\n"]
     for cfg in configs:
-        status = "✅ credentials found" if cfg["creds_file"].exists() else "⚠️  credentials missing"
-        token_status = "token saved" if cfg["token_file"].exists() else "not yet authenticated"
+        status = (
+            "✅ credentials found"
+            if cfg["creds_file"].exists()
+            else "⚠️  credentials missing"
+        )
+        token_status = (
+            "token saved" if cfg["token_file"].exists() else "not yet authenticated"
+        )
         lines.append(f"  • {cfg['name']}  [{status}, {token_status}]")
         lines.append(f"    credentials: {cfg['creds_file'].name}")
     return "\n".join(lines)
@@ -540,16 +565,21 @@ def _list_events_multi(
         seen: set[str] = set()
         for cal in cal_list:
             try:
-                result = svc.events().list(
-                    calendarId=cal["id"],
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    maxResults=max_results,
-                    singleEvents=True,
-                    orderBy="startTime",
-                ).execute()
+                result = (
+                    svc.events()
+                    .list(
+                        calendarId=cal["id"],
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        maxResults=max_results,
+                        singleEvents=True,
+                        orderBy="startTime",
+                    )
+                    .execute()
+                )
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     "Failed to list events for calendar %s: %s", cal.get("id"), e
                 )
@@ -584,8 +614,15 @@ def _list_events_multi(
     return "\n".join(lines)
 
 
-def _create_event(service, calendar_id: str, summary: str, start: str, end: str,
-                  description: str, location: str) -> str:
+def _create_event(
+    service,
+    calendar_id: str,
+    summary: str,
+    start: str,
+    end: str,
+    description: str,
+    location: str,
+) -> str:
     body: dict = {"summary": summary, "start": _parse_dt(start), "end": _parse_dt(end)}
     if description:
         body["description"] = description
@@ -609,7 +646,11 @@ def _update_event(service, calendar_id: str, event_id: str, **fields) -> str:
         event["start"] = _parse_dt(fields["start"])
     if fields.get("end"):
         event["end"] = _parse_dt(fields["end"])
-    updated = service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
+    updated = (
+        service.events()
+        .update(calendarId=calendar_id, eventId=event_id, body=event)
+        .execute()
+    )
     return (
         f"✅ Event updated: {updated.get('summary')}\n"
         f"   Start: {updated['start'].get('dateTime', updated['start'].get('date'))}\n"
@@ -643,12 +684,16 @@ def _rsvp_event(service, calendar_id: str, event_id: str, response: str) -> str:
     self_attendee["responseStatus"] = response
     event["attendees"] = attendees
 
-    updated = service.events().patch(
-        calendarId=calendar_id,
-        eventId=event_id,
-        body={"attendees": attendees},
-        sendUpdates="all",
-    ).execute()
+    updated = (
+        service.events()
+        .patch(
+            calendarId=calendar_id,
+            eventId=event_id,
+            body={"attendees": attendees},
+            sendUpdates="all",
+        )
+        .execute()
+    )
 
     emoji = {"accepted": "✅", "declined": "❌", "tentative": "❓"}[response]
     return (
@@ -657,13 +702,15 @@ def _rsvp_event(service, calendar_id: str, event_id: str, response: str) -> str:
     )
 
 
-def _find_conflicts_multi(services: list[tuple[str, object]], time_min: str, time_max: str) -> str:
+def _find_conflicts_multi(
+    services: list[tuple[str, object]], time_min: str, time_max: str
+) -> str:
     all_events = _gather_timed_events(services, time_min, time_max)
     all_events.sort(key=lambda e: e["_start_dt"])
 
     conflicts = []
     for i, a in enumerate(all_events):
-        for b in all_events[i + 1:]:
+        for b in all_events[i + 1 :]:
             if b["_start_dt"] >= a["_end_dt"]:
                 break
             # Only flag if from different sources (account+calendar)
@@ -687,7 +734,9 @@ def _find_conflicts_multi(services: list[tuple[str, object]], time_min: str, tim
     return "\n".join(lines)
 
 
-def _find_duplicates_multi(services: list[tuple[str, object]], time_min: str, time_max: str) -> str:
+def _find_duplicates_multi(
+    services: list[tuple[str, object]], time_min: str, time_max: str
+) -> str:
     """
     Surface candidate duplicate events for LLM reasoning.
 
@@ -712,7 +761,7 @@ def _find_duplicates_multi(services: list[tuple[str, object]], time_min: str, ti
             continue
         group = [a]
         a_src = (a["_account_name"], a["_calendar_name"])
-        for j, b in enumerate(all_events[i + 1:], start=i + 1):
+        for j, b in enumerate(all_events[i + 1 :], start=i + 1):
             if j in used:
                 continue
             b_src = (b["_account_name"], b["_calendar_name"])
@@ -750,6 +799,7 @@ def _find_duplicates_multi(services: list[tuple[str, object]], time_min: str, ti
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+
 
 async def run(
     action: str,
@@ -809,7 +859,13 @@ async def run(
 
         elif action == "list_events":
             return await asyncio.to_thread(
-                _list_events_multi, services, cal, t_min, t_max, max_results, rsvp_filter
+                _list_events_multi,
+                services,
+                cal,
+                t_min,
+                t_max,
+                max_results,
+                rsvp_filter,
             )
 
         elif action in ("create_event", "update_event", "delete_event", "rsvp_event"):
@@ -826,15 +882,28 @@ async def run(
                 if not summary or not start or not end:
                     return "Error: create_event requires 'summary', 'start', and 'end'."
                 return await asyncio.to_thread(
-                    _create_event, svc, target_cal, summary, start, end, description, location
+                    _create_event,
+                    svc,
+                    target_cal,
+                    summary,
+                    start,
+                    end,
+                    description,
+                    location,
                 )
             elif action == "update_event":
                 if not event_id:
                     return "Error: update_event requires 'event_id'."
                 return await asyncio.to_thread(
-                    _update_event, svc, target_cal, event_id,
-                    summary=summary, start=start, end=end,
-                    description=description, location=location,
+                    _update_event,
+                    svc,
+                    target_cal,
+                    event_id,
+                    summary=summary,
+                    start=start,
+                    end=end,
+                    description=description,
+                    location=location,
                 )
             elif action == "delete_event":
                 if not event_id:
@@ -845,13 +914,19 @@ async def run(
                     return "Error: rsvp_event requires 'event_id'."
                 if not response:
                     return "Error: rsvp_event requires 'response' (accepted / declined / tentative)."
-                return await asyncio.to_thread(_rsvp_event, svc, target_cal, event_id, response)
+                return await asyncio.to_thread(
+                    _rsvp_event, svc, target_cal, event_id, response
+                )
 
         elif action == "find_conflicts":
-            return await asyncio.to_thread(_find_conflicts_multi, services, t_min, t_max)
+            return await asyncio.to_thread(
+                _find_conflicts_multi, services, t_min, t_max
+            )
 
         elif action == "find_duplicates":
-            return await asyncio.to_thread(_find_duplicates_multi, services, t_min, t_max)
+            return await asyncio.to_thread(
+                _find_duplicates_multi, services, t_min, t_max
+            )
 
         else:
             return (

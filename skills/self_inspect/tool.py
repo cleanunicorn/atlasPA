@@ -34,7 +34,14 @@ PARAMETERS = {
     "properties": {
         "operation": {
             "type": "string",
-            "enum": ["overview", "source", "builtin_tools", "config", "skill_detail", "limits"],
+            "enum": [
+                "overview",
+                "source",
+                "builtin_tools",
+                "config",
+                "skill_detail",
+                "limits",
+            ],
             "description": (
                 "overview: Architecture map and file index. "
                 "source: Read a source file (or list all .py files if no target). "
@@ -82,21 +89,30 @@ def _overview(_: str) -> str:
     lines = ["# Atlas — Architecture Overview", f"Root: {_ROOT}", ""]
 
     key_files = [
-        ("gateway.py",              "Legacy entry point — orchestrates all components"),
-        ("main.py",                 "Unified CLI (run / logs / setup commands)"),
-        ("brain/engine.py",         "ReAct reasoning loop (Brain class, MAX_ITERATIONS=10)"),
-        ("providers/",              "LLM abstraction (anthropic / openai / ollama / openrouter)"),
-        ("providers/base.py",       "Shared types: Message, ToolDefinition, ToolCall, LLMResponse"),
-        ("memory/store.py",         "Persistent markdown memory (soul.md, context.md)"),
-        ("memory/history.py",       "Per-user conversation history (JSON, capped at 200 msgs)"),
-        ("memory/retriever.py",     "Keyword-based context relevance filtering"),
-        ("memory/summariser.py",    "LLM-assisted context compression (triggered at >20 entries)"),
-        ("skills/registry.py",      "Auto-discovery and management of core + addon skills"),
-        ("heartbeat/scheduler.py",  "Cron-based background job scheduler"),
-        ("channels/cli/bot.py",     "Terminal interface"),
-        ("channels/telegram/bot.py","Telegram bot"),
+        ("gateway.py", "Legacy entry point — orchestrates all components"),
+        ("main.py", "Unified CLI (run / logs / setup commands)"),
+        ("brain/engine.py", "ReAct reasoning loop (Brain class, MAX_ITERATIONS=10)"),
+        ("providers/", "LLM abstraction (anthropic / openai / ollama / openrouter)"),
+        (
+            "providers/base.py",
+            "Shared types: Message, ToolDefinition, ToolCall, LLMResponse",
+        ),
+        ("memory/store.py", "Persistent markdown memory (soul.md, context.md)"),
+        (
+            "memory/history.py",
+            "Per-user conversation history (JSON, capped at 200 msgs)",
+        ),
+        ("memory/retriever.py", "Keyword-based context relevance filtering"),
+        (
+            "memory/summariser.py",
+            "LLM-assisted context compression (triggered at >20 entries)",
+        ),
+        ("skills/registry.py", "Auto-discovery and management of core + addon skills"),
+        ("heartbeat/scheduler.py", "Cron-based background job scheduler"),
+        ("channels/cli/bot.py", "Terminal interface"),
+        ("channels/telegram/bot.py", "Telegram bot"),
         ("channels/discord/bot.py", "Discord bot"),
-        ("channels/web/bot.py",     "Gradio web UI"),
+        ("channels/web/bot.py", "Gradio web UI"),
     ]
 
     lines.append("## Key Files")
@@ -110,7 +126,9 @@ def _overview(_: str) -> str:
     addon_dir = Path.home() / "agent-files" / "skills"
     lines.append("## Skill Directories")
     lines.append(f"  Core:  {core_dir}")
-    lines.append(f"  Addon: {addon_dir} ({'exists' if addon_dir.exists() else 'not created yet'})")
+    lines.append(
+        f"  Addon: {addon_dir} ({'exists' if addon_dir.exists() else 'not created yet'})"
+    )
 
     core_skills = _list_skill_names(core_dir)
     addon_skills = _list_skill_names(addon_dir)
@@ -128,7 +146,9 @@ def _overview(_: str) -> str:
     lines.append("    → if final text: return to channel → user")
     lines.append("")
     lines.append("## Memory Pipeline")
-    lines.append("  soul.md (identity) + context.md (user facts, auto-summarised at 20 entries)")
+    lines.append(
+        "  soul.md (identity) + context.md (user facts, auto-summarised at 20 entries)"
+    )
     lines.append("  Relevance filtering: top-15 context entries injected per query")
     lines.append("  Conversation history: per-user JSON, capped at 200 messages")
 
@@ -138,7 +158,11 @@ def _overview(_: str) -> str:
 def _source(target: str) -> str:
     if not target:
         # List all Python source files in the project
-        lines = [f"Project source files under {_ROOT}:", "(provide 'target' to read a file)", ""]
+        lines = [
+            f"Project source files under {_ROOT}:",
+            "(provide 'target' to read a file)",
+            "",
+        ]
         for p in sorted(_ROOT.rglob("*.py")):
             parts = p.relative_to(_ROOT).parts
             if any(part in _SKIP_DIRS or part.startswith(".") for part in parts):
@@ -195,9 +219,11 @@ def _builtin_tools(_: str) -> str:
 
     tools: list[tuple[str, str, dict]] = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "ToolDefinition"):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ToolDefinition"
+        ):
             continue
         name = desc = None
         params: dict = {}
@@ -247,23 +273,30 @@ def _builtin_tools(_: str) -> str:
 
 
 def _config(_: str) -> str:
-    SECRET_PATTERNS = {"api_key", "token", "secret", "password", "credential", "webhook"}
+    SECRET_PATTERNS = {
+        "api_key",
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "webhook",
+    }
 
     atlas_keys = [
-        ("LLM_PROVIDER",               "anthropic"),
-        ("ANTHROPIC_MODEL",            "(provider default)"),
-        ("OPENAI_MODEL",               "(provider default)"),
-        ("OLLAMA_BASE_URL",            "http://localhost:11434/v1"),
-        ("OLLAMA_MODEL",               "(not set)"),
-        ("AGENT_NAME",                 "Atlas"),
-        ("AGENT_TIMEZONE",             "UTC"),
-        ("WEB_HOST",                   "0.0.0.0"),
-        ("WEB_PORT",                   "7860"),
-        ("LOG_LEVEL",                  "INFO"),
-        ("LLM_LOG_FILE",               "(auto: logs/llm.jsonl)"),
-        ("CONTEXT_MAX_INJECTED",       "15"),
-        ("CONTEXT_SUMMARY_THRESHOLD",  "20"),
-        ("HISTORY_MAX_MESSAGES",       "200"),
+        ("LLM_PROVIDER", "anthropic"),
+        ("ANTHROPIC_MODEL", "(provider default)"),
+        ("OPENAI_MODEL", "(provider default)"),
+        ("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        ("OLLAMA_MODEL", "(not set)"),
+        ("AGENT_NAME", "Atlas"),
+        ("AGENT_TIMEZONE", "UTC"),
+        ("WEB_HOST", "0.0.0.0"),
+        ("WEB_PORT", "7860"),
+        ("LOG_LEVEL", "INFO"),
+        ("LLM_LOG_FILE", "(auto: logs/llm.jsonl)"),
+        ("CONTEXT_MAX_INJECTED", "15"),
+        ("CONTEXT_SUMMARY_THRESHOLD", "20"),
+        ("HISTORY_MAX_MESSAGES", "200"),
     ]
 
     lines = ["# Active Configuration", ""]
@@ -277,7 +310,8 @@ def _config(_: str) -> str:
 
     # Report which secret keys are set, without values
     secret_set = sorted(
-        k for k in os.environ
+        k
+        for k in os.environ
         if any(s in k.lower() for s in SECRET_PATTERNS) and os.environ[k]
     )
     if secret_set:
@@ -293,7 +327,9 @@ def _config(_: str) -> str:
         fpath = memory_dir / fname
         if fpath.exists():
             size = fpath.stat().st_size
-            content_lines = fpath.read_text(encoding="utf-8", errors="replace").count("\n")
+            content_lines = fpath.read_text(encoding="utf-8", errors="replace").count(
+                "\n"
+            )
             lines.append(f"  {fname}: {size} bytes, {content_lines} lines")
         else:
             lines.append(f"  {fname}: not found")
@@ -361,13 +397,27 @@ def _limits(_: str) -> str:
     lines.append("")
 
     lines.append("## Memory")
-    ctx_injected = _extract_constant(_ROOT / "memory" / "store.py", "CONTEXT_MAX_INJECTED")
-    ctx_threshold = _extract_constant(_ROOT / "memory" / "summariser.py", "CONTEXT_SUMMARY_THRESHOLD")
-    hist_max = _extract_constant(_ROOT / "memory" / "history.py", "HISTORY_MAX_MESSAGES")
-    lines.append(f"  Max context entries injected per query: {ctx_injected or '15 (default)'}")
-    lines.append(f"  Context summarisation threshold: {ctx_threshold or '20 (default)'} entries")
-    lines.append(f"  Conversation history cap: {hist_max or '200 (default)'} messages per user")
-    lines.append("  History images: base64 data stripped on save (replaced with '[image attached]')")
+    ctx_injected = _extract_constant(
+        _ROOT / "memory" / "store.py", "CONTEXT_MAX_INJECTED"
+    )
+    ctx_threshold = _extract_constant(
+        _ROOT / "memory" / "summariser.py", "CONTEXT_SUMMARY_THRESHOLD"
+    )
+    hist_max = _extract_constant(
+        _ROOT / "memory" / "history.py", "HISTORY_MAX_MESSAGES"
+    )
+    lines.append(
+        f"  Max context entries injected per query: {ctx_injected or '15 (default)'}"
+    )
+    lines.append(
+        f"  Context summarisation threshold: {ctx_threshold or '20 (default)'} entries"
+    )
+    lines.append(
+        f"  Conversation history cap: {hist_max or '200 (default)'} messages per user"
+    )
+    lines.append(
+        "  History images: base64 data stripped on save (replaced with '[image attached]')"
+    )
     lines.append("")
 
     lines.append("## Source Reading (this skill)")
@@ -384,7 +434,9 @@ def _limits(_: str) -> str:
 
     lines.append("## Skill System")
     core_skills = _list_skill_names(_ROOT / "skills")
-    lines.append(f"  Core skills (bundled, read-only): {len(core_skills)} — {', '.join(core_skills)}")
+    lines.append(
+        f"  Core skills (bundled, read-only): {len(core_skills)} — {', '.join(core_skills)}"
+    )
     lines.append("  Addon skills: ~/agent-files/skills/ (install via manage_skills)")
     lines.append("  Skill tool names: prefixed with 'skill_' (e.g. skill_web_search)")
     lines.append("  New skills callable immediately after install (no restart needed)")
@@ -416,8 +468,7 @@ def _list_skill_names(directory: Path) -> list[str]:
     if not directory.exists():
         return []
     return sorted(
-        d.name for d in directory.iterdir()
-        if d.is_dir() and (d / "tool.py").exists()
+        d.name for d in directory.iterdir() if d.is_dir() and (d / "tool.py").exists()
     )
 
 

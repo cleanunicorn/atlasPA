@@ -22,15 +22,19 @@ def get_provider() -> BaseLLMProvider:
 
     if provider_name == "anthropic":
         from .anthropic_provider import AnthropicProvider
+
         inner = AnthropicProvider()
     elif provider_name == "openai":
         from .openai_provider import OpenAIProvider
+
         inner = OpenAIProvider()
     elif provider_name == "ollama":
         from .ollama_provider import OllamaProvider
+
         inner = OllamaProvider()
     elif provider_name == "openrouter":
         from .openrouter_provider import OpenRouterProvider
+
         inner = OpenRouterProvider()
     else:
         raise ValueError(
@@ -42,4 +46,5 @@ def get_provider() -> BaseLLMProvider:
         return inner
 
     from .logging_provider import LoggingProvider
+
     return LoggingProvider(inner)

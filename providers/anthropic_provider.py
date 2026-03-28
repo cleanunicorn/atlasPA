@@ -10,7 +10,6 @@ from .base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMRespons
 
 
 class AnthropicProvider(BaseLLMProvider):
-
     def __init__(self):
         self.client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self._model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -33,43 +32,55 @@ class AnthropicProvider(BaseLLMProvider):
         for msg in messages:
             if msg.role == "tool":
                 # Tool result
-                anthropic_messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.tool_call_id,
-                        "content": msg.content,
-                    }]
-                })
+                anthropic_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.tool_call_id,
+                                "content": msg.content,
+                            }
+                        ],
+                    }
+                )
             elif msg.tool_calls:
                 # Assistant message that called tools
                 content = []
                 if msg.content:
                     content.append({"type": "text", "text": msg.content})
                 for tc in msg.tool_calls:
-                    content.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tc["arguments"],
-                    })
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "input": tc["arguments"],
+                        }
+                    )
                 anthropic_messages.append({"role": "assistant", "content": content})
             elif isinstance(msg.content, list):
                 # Multimodal content (text + images)
                 anthropic_content = []
                 for block in msg.content:
                     if block.get("type") == "image":
-                        anthropic_content.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": block["media_type"],
-                                "data": block["data"],
-                            },
-                        })
+                        anthropic_content.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": block["media_type"],
+                                    "data": block["data"],
+                                },
+                            }
+                        )
                     else:
-                        anthropic_content.append({"type": "text", "text": block.get("text", "")})
-                anthropic_messages.append({"role": msg.role, "content": anthropic_content})
+                        anthropic_content.append(
+                            {"type": "text", "text": block.get("text", "")}
+                        )
+                anthropic_messages.append(
+                    {"role": msg.role, "content": anthropic_content}
+                )
             else:
                 anthropic_messages.append({"role": msg.role, "content": msg.content})
 
@@ -77,11 +88,13 @@ class AnthropicProvider(BaseLLMProvider):
         anthropic_tools = []
         if tools:
             for t in tools:
-                anthropic_tools.append({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.parameters,
-                })
+                anthropic_tools.append(
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.parameters,
+                    }
+                )
 
         kwargs = dict(
             model=self._model,
@@ -90,7 +103,9 @@ class AnthropicProvider(BaseLLMProvider):
         )
         if json_mode:
             # Anthropic has no native JSON mode; prepend a strong instruction.
-            system = (system + "\n\n" if system else "") + "Reply with valid JSON only — no prose, no markdown fences."
+            system = (
+                system + "\n\n" if system else ""
+            ) + "Reply with valid JSON only — no prose, no markdown fences."
         if system:
             kwargs["system"] = system
         if anthropic_tools:
@@ -106,11 +121,13 @@ class AnthropicProvider(BaseLLMProvider):
             if block.type == "text":
                 content_text = block.text
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input,
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=block.input,
+                    )
+                )
 
         return LLMResponse(
             content=content_text,

@@ -92,6 +92,7 @@ def make_brain(
     This preserves the old test API while working with the new DSPy engine.
     """
     import types
+
     mock_lm = types.SimpleNamespace(model="mock/model")
 
     with (
@@ -117,19 +118,25 @@ def make_brain(
         tools = brain._build_tools(state)
         tool_map = {t.name: t for t in tools}
 
-        text = _extract_text(user_message) if isinstance(user_message, list) else user_message
+        text = (
+            _extract_text(user_message)
+            if isinstance(user_message, list)
+            else user_message
+        )
         messages = list(conversation_history) + [Message(role="user", content=text)]
 
         for resp in _responses:
             if resp.tool_calls:
-                messages.append(Message(
-                    role="assistant",
-                    content=resp.content or "",
-                    tool_calls=[
-                        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                        for tc in resp.tool_calls
-                    ],
-                ))
+                messages.append(
+                    Message(
+                        role="assistant",
+                        content=resp.content or "",
+                        tool_calls=[
+                            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                            for tc in resp.tool_calls
+                        ],
+                    )
+                )
                 for tc in resp.tool_calls:
                     tool = tool_map.get(tc.name)
                     if tool is not None:
@@ -138,15 +145,23 @@ def make_brain(
                         except Exception as e:
                             result = f"Error in {tc.name}: {e}"
                     elif tc.name.startswith("skill_"):
-                        skill = skills.get_skill(tc.name[len("skill_"):])
-                        result = await skill.run(**tc.arguments) if skill else f"Unknown skill: {tc.name}"
+                        skill = skills.get_skill(tc.name[len("skill_") :])
+                        result = (
+                            await skill.run(**tc.arguments)
+                            if skill
+                            else f"Unknown skill: {tc.name}"
+                        )
                     else:
                         result = f"Unknown tool: {tc.name}"
-                    messages.append(Message(role="tool", content=str(result), tool_call_id=tc.id))
+                    messages.append(
+                        Message(role="tool", content=str(result), tool_call_id=tc.id)
+                    )
 
                 # ask_user or reload — stop immediately
                 if state.clarification:
-                    messages.append(Message(role="assistant", content=state.clarification))
+                    messages.append(
+                        Message(role="assistant", content=state.clarification)
+                    )
                     brain._pending_files = state.pending_files
                     brain._current_plan = state.current_plan
                     return state.clarification, messages
@@ -182,7 +197,9 @@ async def test_relevance_filtering_in_system_prompt(tmp_memory):
         tmp_memory.append_context(f"Generic fact number {i} about something unrelated.")
     tmp_memory.append_context("User's favourite colour is electric blue.")
 
-    system = await tmp_memory.build_system_prompt(query="What is the user's favourite colour?")
+    system = await tmp_memory.build_system_prompt(
+        query="What is the user's favourite colour?"
+    )
     assert "electric blue" in system.lower()
 
 
@@ -250,7 +267,13 @@ async def test_summariser_compresses_old_entries(tmp_memory):
     entries_before = len(tmp_memory.parse_context_entries())
     assert entries_before > SUMMARY_THRESHOLD
 
-    provider = MockProvider([LLMResponse(content="User did various things across many days.", tool_calls=[])])
+    provider = MockProvider(
+        [
+            LLMResponse(
+                content="User did various things across many days.", tool_calls=[]
+            )
+        ]
+    )
     result = await maybe_summarise(tmp_memory, provider)
 
     assert result is True

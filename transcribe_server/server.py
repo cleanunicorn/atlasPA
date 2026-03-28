@@ -48,6 +48,7 @@ MODEL_NAME = "nvidia/parakeet-tdt-1.1b"
 print(f"Loading {MODEL_NAME} …", flush=True)
 try:
     import nemo.collections.asr as nemo_asr
+
     _model = nemo_asr.models.ASRModel.from_pretrained(MODEL_NAME)
     _model.eval()
     print(f"Model ready — listening on :{PORT}", flush=True)
@@ -57,6 +58,7 @@ except Exception as exc:
 
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
+
 
 def _json_response(handler: "Handler", body: dict, status: int = 200) -> None:
     data = json.dumps(body).encode()
@@ -102,7 +104,9 @@ class Handler(BaseHTTPRequestHandler):
 
         audio_bytes = _parse_multipart(self)
         if not audio_bytes:
-            _json_response(self, {"error": "send multipart/form-data with a 'file' field"}, 400)
+            _json_response(
+                self, {"error": "send multipart/form-data with a 'file' field"}, 400
+            )
             return
 
         tmp_path = None

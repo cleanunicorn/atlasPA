@@ -81,7 +81,10 @@ async def run(
         body_text = response.text
 
         if len(body_text) > MAX_BODY_CHARS:
-            body_text = body_text[:MAX_BODY_CHARS] + f"\n\n... [truncated at {MAX_BODY_CHARS} chars]"
+            body_text = (
+                body_text[:MAX_BODY_CHARS]
+                + f"\n\n... [truncated at {MAX_BODY_CHARS} chars]"
+            )
 
         lines = [
             f"HTTP {response.status_code} {response.reason_phrase}",

@@ -61,9 +61,7 @@ class CLIBot:
 
         while self._running:
             try:
-                user_input = await loop.run_in_executor(
-                    None, self._read_input, "You: "
-                )
+                user_input = await loop.run_in_executor(None, self._read_input, "You: ")
             except (EOFError, KeyboardInterrupt):
                 print("\nGoodbye!")
                 break
@@ -92,13 +90,17 @@ class CLIBot:
                     continue
                 suffix = image_path.suffix.lower()
                 media_type_map = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                    ".png": "image/png", ".gif": "image/gif",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".gif": "image/gif",
                     ".webp": "image/webp",
                 }
                 media_type = media_type_map.get(suffix, "image/jpeg")
                 img_b64 = base64.b64encode(image_path.read_bytes()).decode()
-                user_input = [{"type": "image", "media_type": media_type, "data": img_b64}]
+                user_input = [
+                    {"type": "image", "media_type": media_type, "data": img_b64}
+                ]
                 print(f"📸 Image loaded: {image_path.name}\n")
             elif user_input.lower().startswith("/voice "):
                 audio_path = Path(user_input[7:].strip()).expanduser()
@@ -108,6 +110,7 @@ class CLIBot:
                 print(f"🎤 Transcribing: {audio_path.name}...")
                 try:
                     from channels.transcribe import transcribe
+
                     transcript = await transcribe(audio_path)
                     print(f"📝 Transcript: {transcript}\n")
                     user_input = transcript
@@ -121,6 +124,7 @@ class CLIBot:
             print()
             history = self._history_store.load(CLI_USER_ID)
             try:
+
                 async def _on_status(status: str) -> None:
                     print(f"\r  {status: <40}", end="", flush=True)
 

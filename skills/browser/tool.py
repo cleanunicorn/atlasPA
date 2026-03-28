@@ -109,7 +109,9 @@ async def run(
             if wait_seconds and wait_seconds > 0:
                 await asyncio.sleep(min(float(wait_seconds), 30))
 
-            result = await _perform_action(page, action, selector, value, url, timeout_ms)
+            result = await _perform_action(
+                page, action, selector, value, url, timeout_ms
+            )
             await browser.close()
             return result
 
@@ -117,7 +119,9 @@ async def run(
         return f"Browser error: {e}"
 
 
-async def _perform_action(page, action: str, selector: str, value: str, url: str, timeout_ms: int) -> str:
+async def _perform_action(
+    page, action: str, selector: str, value: str, url: str, timeout_ms: int
+) -> str:
     from playwright.async_api import TimeoutError as PWTimeout
 
     if action == "read":
@@ -132,12 +136,15 @@ async def _perform_action(page, action: str, selector: str, value: str, url: str
         header = f"# {title}\nURL: {url}\n\n"
         full = header + text
         if len(full) > MAX_TEXT_CHARS:
-            full = full[:MAX_TEXT_CHARS] + f"\n\n... [truncated at {MAX_TEXT_CHARS} chars]"
+            full = (
+                full[:MAX_TEXT_CHARS] + f"\n\n... [truncated at {MAX_TEXT_CHARS} chars]"
+            )
         return full
 
     elif action == "screenshot":
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         from datetime import datetime
+
         filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         path = SCREENSHOT_DIR / filename
         await page.screenshot(path=str(path), full_page=False)
@@ -183,12 +190,15 @@ async def _perform_action(page, action: str, selector: str, value: str, url: str
             return f"Error extracting elements: {e}"
 
     else:
-        return f"Unknown action: '{action}'. Use: read, screenshot, click, fill, extract"
+        return (
+            f"Unknown action: '{action}'. Use: read, screenshot, click, fill, extract"
+        )
 
 
 def _clean_text(text: str) -> str:
     """Collapse excessive whitespace while preserving paragraph breaks."""
     import re
+
     # Collapse 3+ blank lines into 2
     text = re.sub(r"\n{3,}", "\n\n", text)
     # Collapse runs of spaces/tabs (not newlines)

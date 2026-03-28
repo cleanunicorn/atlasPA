@@ -65,11 +65,14 @@ class LocalEmbedder:
             return self._model
         try:
             from sentence_transformers import SentenceTransformer
+
             logger.info(f"LocalEmbedder: loading model '{self._model_name}' …")
             self._model = SentenceTransformer(self._model_name)
             logger.info("LocalEmbedder: model ready")
         except Exception as exc:
-            logger.warning(f"LocalEmbedder: could not load model ({exc}); semantic memory disabled")
+            logger.warning(
+                f"LocalEmbedder: could not load model ({exc}); semantic memory disabled"
+            )
             self._enabled = False
             self._model = None
         return self._model
@@ -87,7 +90,9 @@ class LocalEmbedder:
             vec = await loop.run_in_executor(None, self._encode_query_sync, text)
             return vec
         except Exception as exc:
-            logger.debug(f"LocalEmbedder.embed_query failed ({exc}); falling back to keyword scoring")
+            logger.debug(
+                f"LocalEmbedder.embed_query failed ({exc}); falling back to keyword scoring"
+            )
             return None
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]] | None:
@@ -103,7 +108,9 @@ class LocalEmbedder:
             vecs = await loop.run_in_executor(None, self._encode_documents_sync, texts)
             return vecs
         except Exception as exc:
-            logger.debug(f"LocalEmbedder.embed_documents failed ({exc}); falling back to keyword scoring")
+            logger.debug(
+                f"LocalEmbedder.embed_documents failed ({exc}); falling back to keyword scoring"
+            )
             return None
 
     # ------------------------------------------------------------------

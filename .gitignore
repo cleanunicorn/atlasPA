@@ -249,3 +249,6 @@ config/google_token*.json
 config/google_credentials*.json
 config/google_accounts.json
 config/jobs.json
+
+# Claude Code
+.claude/

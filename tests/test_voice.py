@@ -12,9 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── _to_wav ────────────────────────────────────────────────────────────────────
 
+
 def test_to_wav_returns_same_path_for_wav(tmp_path):
     """WAV files are returned unchanged."""
     from channels.transcribe import _to_wav
+
     wav = tmp_path / "audio.wav"
     wav.write_bytes(b"RIFF" + b"\x00" * 40)
     assert _to_wav(wav) == wav
@@ -23,11 +25,13 @@ def test_to_wav_returns_same_path_for_wav(tmp_path):
 def test_to_wav_no_pydub_raises(tmp_path):
     """RuntimeError with install instructions when pydub is missing."""
     import sys
+
     ogg = tmp_path / "voice.ogg"
     ogg.write_bytes(b"OggS" + b"\x00" * 50)
 
     with patch.dict(sys.modules, {"pydub": None}):
         import channels.transcribe as t_mod
+
         with pytest.raises(RuntimeError, match="pydub"):
             t_mod._to_wav(ogg)
 
@@ -55,6 +59,7 @@ def test_to_wav_converts_ogg(tmp_path):
 
 
 # ── _check_server ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_check_server_true_when_healthy():
@@ -87,12 +92,15 @@ async def test_check_server_false_when_unreachable():
 
 # ── _start_container ──────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_start_container_success():
     """docker run exit 0 → logs container ID, no exception."""
     import channels.transcribe as t_mod
 
-    with patch.object(t_mod, "_run_docker", AsyncMock(return_value=(0, "abc123def456", ""))):
+    with patch.object(
+        t_mod, "_run_docker", AsyncMock(return_value=(0, "abc123def456", ""))
+    ):
         await t_mod._start_container()  # should not raise
 
 
@@ -101,7 +109,9 @@ async def test_start_container_name_conflict_is_ok():
     """docker run exit 125 (name conflict) → no exception, just a log."""
     import channels.transcribe as t_mod
 
-    with patch.object(t_mod, "_run_docker", AsyncMock(return_value=(125, "", "already in use"))):
+    with patch.object(
+        t_mod, "_run_docker", AsyncMock(return_value=(125, "", "already in use"))
+    ):
         await t_mod._start_container()  # should not raise
 
 
@@ -123,7 +133,9 @@ async def test_start_container_docker_run_fails():
     """Non-GPU, non-125 exit code → RuntimeError with stderr."""
     import channels.transcribe as t_mod
 
-    with patch.object(t_mod, "_run_docker", AsyncMock(return_value=(1, "", "image not found"))):
+    with patch.object(
+        t_mod, "_run_docker", AsyncMock(return_value=(1, "", "image not found"))
+    ):
         with pytest.raises(RuntimeError, match="docker run failed"):
             await t_mod._start_container()
 
@@ -138,7 +150,11 @@ async def test_start_container_gpu_error_retries_cpu():
     async def mock_run_docker(cmd):
         calls.append(cmd)
         if "--gpus" in cmd:
-            return (1, "", "OCI runtime create failed: nvidia-persistenced: no such file or directory")
+            return (
+                1,
+                "",
+                "OCI runtime create failed: nvidia-persistenced: no such file or directory",
+            )
         return (0, "cpu_container_id", "")
 
     with patch.object(t_mod, "_run_docker", mock_run_docker):
@@ -149,6 +165,7 @@ async def test_start_container_gpu_error_retries_cpu():
 
 
 # ── _ensure_server_running ────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ensure_server_skips_start_if_already_healthy():
@@ -194,6 +211,7 @@ async def test_ensure_server_raises_on_timeout():
 
 
 # ── transcribe (full flow) ────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_transcribe_starts_server_and_returns_text(tmp_path):
@@ -279,12 +297,16 @@ async def test_transcribe_cleans_up_converted_wav(tmp_path):
 
 # ── Telegram bot voice handler ─────────────────────────────────────────────────
 
+
 def make_tg_bot():
     with patch("channels.telegram.bot.Application") as mock_app_cls:
         mock_app = MagicMock()
-        mock_app_cls.builder.return_value.token.return_value.build.return_value = mock_app
+        mock_app_cls.builder.return_value.token.return_value.build.return_value = (
+            mock_app
+        )
 
         from channels.telegram.bot import TelegramBot
+
         bot = TelegramBot.__new__(TelegramBot)
         bot.brain = MagicMock()
         bot.brain.think = AsyncMock(return_value=("Got it!", []))
@@ -320,7 +342,10 @@ async def test_handle_voice_transcribes_and_replies(tmp_path):
 
     with (
         patch("channels.telegram.bot._UPLOAD_DIR", tmp_path),
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="remind me tomorrow")),
+        patch(
+            "channels.transcribe.transcribe",
+            new=AsyncMock(return_value="remind me tomorrow"),
+        ),
         patch("channels.telegram.bot.TelegramBot._send_file", new=AsyncMock()),
     ):
         await bot._handle_voice(update, MagicMock())
@@ -365,7 +390,9 @@ async def test_handle_voice_caption_appended(tmp_path):
 
     with (
         patch("channels.telegram.bot._UPLOAD_DIR", tmp_path),
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="call John")),
+        patch(
+            "channels.transcribe.transcribe", new=AsyncMock(return_value="call John")
+        ),
         patch("channels.telegram.bot.TelegramBot._send_file", new=AsyncMock()),
     ):
         await bot._handle_voice(update, MagicMock())
@@ -389,10 +416,12 @@ async def test_handle_voice_unauthorized():
 # Discord audio handling
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def make_discord_bot():
     """Create a DiscordBot with mocked internals."""
     with patch("channels.discord.bot.discord.Client"):
         from channels.discord.bot import DiscordBot
+
         bot = DiscordBot.__new__(DiscordBot)
         bot.brain = MagicMock()
         bot.brain.think = AsyncMock(return_value=("Got it!", []))
@@ -450,7 +479,10 @@ async def test_discord_handle_audio_transcribes(tmp_path):
     with (
         patch("channels.discord.bot._UPLOAD_DIR", tmp_path),
         patch("channels.discord.bot.aiohttp.ClientSession", _mock_aiohttp_session()),
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="schedule meeting")),
+        patch(
+            "channels.transcribe.transcribe",
+            new=AsyncMock(return_value="schedule meeting"),
+        ),
     ):
         await bot._handle_audio(message, attachments, "")
 
@@ -488,7 +520,9 @@ async def test_discord_handle_audio_with_text(tmp_path):
     with (
         patch("channels.discord.bot._UPLOAD_DIR", tmp_path),
         patch("channels.discord.bot.aiohttp.ClientSession", _mock_aiohttp_session()),
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="hello world")),
+        patch(
+            "channels.transcribe.transcribe", new=AsyncMock(return_value="hello world")
+        ),
     ):
         await bot._handle_audio(message, attachments, "check this")
 
@@ -500,6 +534,7 @@ async def test_discord_handle_audio_with_text(tmp_path):
 # ══════════════════════════════════════════════════════════════════════════════
 # Web audio handling
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 @pytest.mark.asyncio
 async def test_web_handle_audio_transcribes(tmp_path):
@@ -520,7 +555,10 @@ async def test_web_handle_audio_transcribes(tmp_path):
 
     with (
         patch("channels.web.bot._UPLOAD_DIR", tmp_path),
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="buy groceries")),
+        patch(
+            "channels.transcribe.transcribe",
+            new=AsyncMock(return_value="buy groceries"),
+        ),
     ):
         await bot._handle_audio_ws(ws, "session123", [], data)
 
@@ -586,6 +624,7 @@ async def test_web_handle_audio_empty_data(tmp_path):
 # CLI /voice command
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 @pytest.mark.asyncio
 async def test_cli_voice_command_transcribes(tmp_path):
     """CLI /voice <path> transcribes and sends transcript to brain."""
@@ -605,7 +644,9 @@ async def test_cli_voice_command_transcribes(tmp_path):
     inputs = iter([f"/voice {audio_file}", "/quit"])
 
     with (
-        patch("channels.transcribe.transcribe", new=AsyncMock(return_value="hello there")),
+        patch(
+            "channels.transcribe.transcribe", new=AsyncMock(return_value="hello there")
+        ),
         patch.object(bot, "_read_input", side_effect=inputs),
         patch("builtins.print"),
     ):

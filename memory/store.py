@@ -38,6 +38,7 @@ class MemoryStore:
         # Semantic memory (disable by setting EMBED_MODEL="" in env)
         from memory.embedder import LocalEmbedder
         from memory.embedding_cache import EmbeddingCache
+
         self._embedder = LocalEmbedder()
         self._cache = EmbeddingCache() if self._embedder.enabled else None
 
@@ -93,7 +94,9 @@ class MemoryStore:
             # No dated entries — check for a plain background block
             # Strip the header and placeholder lines
             body = re.sub(r"^# .*$", "", text, flags=re.MULTILINE)
-            body = body.replace("_Nothing stored yet. This file grows as you learn about the user._", "")
+            body = body.replace(
+                "_Nothing stored yet. This file grows as you learn about the user._", ""
+            )
             body = body.strip()
             if body:
                 entries.append(ContextEntry(timestamp="", content=body))
@@ -103,7 +106,9 @@ class MemoryStore:
         preamble = text[: splits[0].start()].strip()
         # Strip the file header line
         preamble = re.sub(r"^# .*$", "", preamble, flags=re.MULTILINE).strip()
-        preamble = preamble.replace("_Nothing stored yet. This file grows as you learn about the user._", "").strip()
+        preamble = preamble.replace(
+            "_Nothing stored yet. This file grows as you learn about the user._", ""
+        ).strip()
         if preamble:
             entries.append(ContextEntry(timestamp="", content=preamble))
 
@@ -146,9 +151,7 @@ class MemoryStore:
         Pass empty strings to clear (reset to home).
         """
         if location and timezone:
-            self.location_path.write_text(
-                f"{location}\t{timezone}\n", encoding="utf-8"
-            )
+            self.location_path.write_text(f"{location}\t{timezone}\n", encoding="utf-8")
         elif self.location_path.exists():
             self.location_path.unlink()
 
@@ -201,7 +204,9 @@ class MemoryStore:
         preview = best_entry.content[:80]
         return f"✅ Forgot: [{best_entry.timestamp}] {preview}"
 
-    def replace_context_entries(self, summary: str, recent_entries: list[ContextEntry]) -> None:
+    def replace_context_entries(
+        self, summary: str, recent_entries: list[ContextEntry]
+    ) -> None:
         """
         Rebuild context.md from a compressed summary + a list of recent entries.
         Called by the summariser after compressing old entries.
@@ -225,13 +230,17 @@ class MemoryStore:
                 lines.append(f"\n{entry.content.strip()}\n")
 
         if not has_content:
-            lines.append("\n_Nothing stored yet. This file grows as you learn about the user._\n")
+            lines.append(
+                "\n_Nothing stored yet. This file grows as you learn about the user._\n"
+            )
 
         self.context_path.write_text("".join(lines), encoding="utf-8")
 
     # ── System Prompt ─────────────────────────────────────────────────────────
 
-    async def build_system_prompt(self, skills_summary: str = "", query: str = "") -> str:
+    async def build_system_prompt(
+        self, skills_summary: str = "", query: str = ""
+    ) -> str:
         """
         Assemble the full system prompt from soul + context + skills.
 
@@ -271,10 +280,16 @@ class MemoryStore:
 
             if self._embedder.enabled and self._cache is not None:
                 selected_dated = await select_relevant_semantic(
-                    dated, query or "", self._embedder, self._cache, top_k=CONTEXT_MAX_INJECTED
+                    dated,
+                    query or "",
+                    self._embedder,
+                    self._cache,
+                    top_k=CONTEXT_MAX_INJECTED,
                 )
             else:
-                selected_dated = select_relevant(dated, query or "", top_k=CONTEXT_MAX_INJECTED)
+                selected_dated = select_relevant(
+                    dated, query or "", top_k=CONTEXT_MAX_INJECTED
+                )
 
             selected = background + selected_dated
             if len(selected) < len(entries):

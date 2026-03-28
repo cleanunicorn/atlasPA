@@ -68,7 +68,11 @@ class WebBot:
 
         # Serve agent-generated files (screenshots etc.)
         _FILES_DIR.mkdir(parents=True, exist_ok=True)
-        app.mount("/files", StaticFiles(directory=str(_FILES_DIR), check_dir=False), name="files")
+        app.mount(
+            "/files",
+            StaticFiles(directory=str(_FILES_DIR), check_dir=False),
+            name="files",
+        )
 
         @app.get("/", response_class=HTMLResponse)
         async def index():
@@ -87,7 +91,9 @@ class WebBot:
 
                     # Audio message: {"type": "audio", "data": "<base64>", "filename": "recording.webm"}
                     if data.get("type") == "audio":
-                        await self._handle_audio_ws(websocket, session_id, history, data)
+                        await self._handle_audio_ws(
+                            websocket, session_id, history, data
+                        )
                         history = self._history.load(session_id)
                         continue
 
@@ -99,14 +105,18 @@ class WebBot:
                     if user_msg.lower() == "/clear":
                         self._history.clear(session_id)
                         history = []
-                        await websocket.send_json({"type": "text", "content": "🧹 Conversation cleared."})
+                        await websocket.send_json(
+                            {"type": "text", "content": "🧹 Conversation cleared."}
+                        )
                         continue
 
                     logger.info(f"Web [{session_id[:8]}]: {user_msg[:100]}")
 
                     async def _on_status(status: str) -> None:
                         try:
-                            await websocket.send_json({"type": "status", "content": status})
+                            await websocket.send_json(
+                                {"type": "status", "content": status}
+                            )
                         except Exception:
                             pass
 
@@ -127,13 +137,16 @@ class WebBot:
                                 dest = _FILES_DIR / path.name
                                 if path != dest:
                                     import shutil
+
                                     shutil.copy2(path, dest)
-                                await websocket.send_json({
-                                    "type": "file",
-                                    "name": path.name,
-                                    "url": f"/files/{path.name}",
-                                    "caption": caption,
-                                })
+                                await websocket.send_json(
+                                    {
+                                        "type": "file",
+                                        "name": path.name,
+                                        "url": f"/files/{path.name}",
+                                        "caption": caption,
+                                    }
+                                )
 
                     except Exception as e:
                         logger.exception("Error in brain.think()")
@@ -158,12 +171,15 @@ class WebBot:
         save_path = _UPLOAD_DIR / f"web_{session_id[:8]}_{filename}"
         save_path.write_bytes(base64.b64decode(audio_b64))
 
-        logger.info(f"Audio received from web [{session_id[:8]}]: {filename} → {save_path}")
+        logger.info(
+            f"Audio received from web [{session_id[:8]}]: {filename} → {save_path}"
+        )
 
         # Transcribe
         transcript: str | None = None
         try:
             from channels.transcribe import transcribe
+
             transcript = await transcribe(save_path)
             logger.info(f"Transcribed ({filename}): {transcript[:120]}")
         except RuntimeError as e:
@@ -181,10 +197,12 @@ class WebBot:
                 "Transcription is unavailable — nemo_toolkit may not be installed.]\n"
                 "The user sent an audio message."
             )
-            await websocket.send_json({
-                "type": "transcript",
-                "content": "(transcription unavailable)",
-            })
+            await websocket.send_json(
+                {
+                    "type": "transcript",
+                    "content": "(transcription unavailable)",
+                }
+            )
 
         try:
             response, history = await self.brain.think(
@@ -200,13 +218,16 @@ class WebBot:
                     dest = _FILES_DIR / path.name
                     if path != dest:
                         import shutil
+
                         shutil.copy2(path, dest)
-                    await websocket.send_json({
-                        "type": "file",
-                        "name": path.name,
-                        "url": f"/files/{path.name}",
-                        "caption": caption,
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "file",
+                            "name": path.name,
+                            "url": f"/files/{path.name}",
+                            "caption": caption,
+                        }
+                    )
         except Exception as e:
             logger.exception("Error processing audio message")
             await websocket.send_json({"type": "error", "content": str(e)})

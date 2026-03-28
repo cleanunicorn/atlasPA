@@ -99,7 +99,9 @@ class DiscordBot:
         async def on_ready():
             await self._tree.sync()
             agent_name = os.getenv("AGENT_NAME", "Atlas")
-            logger.info(f"Discord bot ready — logged in as {self._client.user} ({agent_name})")
+            logger.info(
+                f"Discord bot ready — logged in as {self._client.user} ({agent_name})"
+            )
 
         @self._client.event
         async def on_message(message: discord.Message):
@@ -127,7 +129,8 @@ class DiscordBot:
 
             # Check for audio attachments first
             audio_attachments = [
-                a for a in message.attachments
+                a
+                for a in message.attachments
                 if a.content_type and a.content_type.startswith("audio/")
             ]
             if audio_attachments:
@@ -136,7 +139,8 @@ class DiscordBot:
 
             # Build multimodal content if image attachments are present
             image_attachments = [
-                a for a in message.attachments
+                a
+                for a in message.attachments
                 if a.content_type and a.content_type.startswith("image/")
             ]
             if image_attachments:
@@ -150,13 +154,17 @@ class DiscordBot:
                                 img_bytes = await resp.read()
                             media_type = att.content_type.split(";")[0]
                             img_b64 = base64.b64encode(img_bytes).decode()
-                            user_content.append({
-                                "type": "image",
-                                "media_type": media_type,
-                                "data": img_b64,
-                            })
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "media_type": media_type,
+                                    "data": img_b64,
+                                }
+                            )
                         except Exception as e:
-                            logger.warning(f"Could not download Discord attachment: {e}")
+                            logger.warning(
+                                f"Could not download Discord attachment: {e}"
+                            )
                 if not user_content:
                     return
             else:
@@ -236,6 +244,7 @@ class DiscordBot:
         transcript: str | None = None
         try:
             from channels.transcribe import transcribe
+
             transcript = await transcribe(save_path)
             logger.info(f"Transcribed ({filename}): {transcript[:120]}")
         except RuntimeError as e:
@@ -277,15 +286,21 @@ class DiscordBot:
         @self._tree.command(name="clear", description="Reset your conversation history")
         async def cmd_clear(interaction: discord.Interaction):
             if not self._is_allowed(interaction.user.id):
-                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                await interaction.response.send_message(
+                    "⛔ Unauthorized.", ephemeral=True
+                )
                 return
             self._history.clear(self._user_id_str(interaction.user))
-            await interaction.response.send_message("🧹 Conversation cleared.", ephemeral=True)
+            await interaction.response.send_message(
+                "🧹 Conversation cleared.", ephemeral=True
+            )
 
         @self._tree.command(name="status", description="Show agent status")
         async def cmd_status(interaction: discord.Interaction):
             if not self._is_allowed(interaction.user.id):
-                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                await interaction.response.send_message(
+                    "⛔ Unauthorized.", ephemeral=True
+                )
                 return
             user_id = self._user_id_str(interaction.user)
             history = self._history.load(user_id)
@@ -309,7 +324,9 @@ class DiscordBot:
         Sends as a DM to each allowed user.
         """
         if not self._allowed_users:
-            logger.warning("push_message: DISCORD_ALLOWED_USERS is empty — nowhere to push")
+            logger.warning(
+                "push_message: DISCORD_ALLOWED_USERS is empty — nowhere to push"
+            )
             return
 
         for user_id in self._allowed_users:
@@ -317,7 +334,7 @@ class DiscordBot:
                 user = await self._client.fetch_user(user_id)
                 dm = await user.create_dm()
                 await _send_long(dm.send, text)
-                for path, caption in (files or []):
+                for path, caption in files or []:
                     await _send_file(dm.send, Path(path), caption)
             except Exception as e:
                 logger.error(f"push_message: failed to DM user {user_id}: {e}")
@@ -329,6 +346,7 @@ class DiscordBot:
         logger.info("Starting Discord bot...")
         await self._client.login(self._token)
         import asyncio
+
         asyncio.get_event_loop().create_task(self._client.connect())
 
     async def stop(self) -> None:
@@ -339,10 +357,11 @@ class DiscordBot:
 
 # ── Module-level helpers ───────────────────────────────────────────────────────
 
+
 async def _send_long(send_fn, text: str) -> None:
     """Send text, splitting at 2000 chars (Discord limit)."""
     for i in range(0, max(1, len(text)), 2000):
-        await send_fn(text[i:i + 2000])
+        await send_fn(text[i : i + 2000])
 
 
 async def _send_file(reply_fn, path: Path, caption: str) -> None:

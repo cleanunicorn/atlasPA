@@ -22,7 +22,9 @@ async def test_base_stream_fallback_calls_on_token():
     from providers.base import BaseLLMProvider
 
     class MinimalProvider(BaseLLMProvider):
-        async def complete(self, messages, tools=None, system=None, max_tokens=4096, json_mode=False):
+        async def complete(
+            self, messages, tools=None, system=None, max_tokens=4096, json_mode=False
+        ):
             return LLMResponse(content="hello world", stop_reason="end_turn")
 
         @property
@@ -45,10 +47,14 @@ async def test_base_stream_fallback_skips_on_token_for_tool_calls():
     from providers.base import BaseLLMProvider
 
     class ToolProvider(BaseLLMProvider):
-        async def complete(self, messages, tools=None, system=None, max_tokens=4096, json_mode=False):
+        async def complete(
+            self, messages, tools=None, system=None, max_tokens=4096, json_mode=False
+        ):
             return LLMResponse(
                 content=None,
-                tool_calls=[ToolCall(id="x", name="remember", arguments={"note": "hi"})],
+                tool_calls=[
+                    ToolCall(id="x", name="remember", arguments={"note": "hi"})
+                ],
                 stop_reason="tool_use",
             )
 

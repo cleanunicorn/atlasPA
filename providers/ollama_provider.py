@@ -21,8 +21,12 @@ class OllamaProvider(OpenAIProvider):
 
     def __init__(self):
         # Set env vars that OpenAIProvider reads
-        os.environ.setdefault("OPENAI_BASE_URL", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
-        os.environ.setdefault("OPENAI_API_KEY", "ollama")  # Ollama ignores the key but openai client requires one
+        os.environ.setdefault(
+            "OPENAI_BASE_URL", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        )
+        os.environ.setdefault(
+            "OPENAI_API_KEY", "ollama"
+        )  # Ollama ignores the key but openai client requires one
         self._ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
         super().__init__()
         self._model = self._ollama_model  # Override model set by parent

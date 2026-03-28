@@ -45,9 +45,7 @@ async def maybe_summarise(store: MemoryStore, provider: BaseLLMProvider) -> bool
         f"Compressing oldest {n_to_compress} entries..."
     )
 
-    old_text = "\n\n".join(
-        f"[{e.timestamp}] {e.content}" for e in old_entries
-    )
+    old_text = "\n\n".join(f"[{e.timestamp}] {e.content}" for e in old_entries)
 
     prompt = (
         "The following are memory notes about a user, ordered by time. "

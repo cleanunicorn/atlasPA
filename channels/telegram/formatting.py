@@ -29,7 +29,9 @@ def md_to_html(text: str) -> str:
         lang = m.group(1).strip()
         code = html.escape(m.group(2))
         if lang:
-            rendered = f'<pre><code class="language-{html.escape(lang)}">{code}</code></pre>'
+            rendered = (
+                f'<pre><code class="language-{html.escape(lang)}">{code}</code></pre>'
+            )
         else:
             rendered = f"<pre>{code}</pre>"
         code_blocks.append(rendered)

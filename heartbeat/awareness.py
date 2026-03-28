@@ -84,11 +84,13 @@ def _save_log(entries: list[dict]) -> None:
 
 def _append_log(triggered: bool, summary: str) -> None:
     entries = _load_log()
-    entries.append({
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "triggered": triggered,
-        "summary": summary[:200],
-    })
+    entries.append(
+        {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "triggered": triggered,
+            "summary": summary[:200],
+        }
+    )
     _save_log(entries[-LOG_MAX_ENTRIES:])
 
 
@@ -124,9 +126,7 @@ class Awareness:
             replace_existing=True,
         )
         self._scheduler.start()
-        logger.info(
-            f"Awareness started — checking every {AWARENESS_INTERVAL_MINUTES}m"
-        )
+        logger.info(f"Awareness started — checking every {AWARENESS_INTERVAL_MINUTES}m")
 
     async def stop(self) -> None:
         if self._scheduler.running:
