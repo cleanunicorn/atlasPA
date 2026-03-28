@@ -14,8 +14,8 @@ DSPy's ReAct runs tools sequentially; that behaviour is exercised in integration
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from providers.base import Message, LLMResponse, ToolCall
-from brain.engine import _make_reflect, _make_create_plan, _make_ask_user, _TurnState
+from providers.base import LLMResponse, ToolCall
+from brain.engine import _make_reflect, _make_ask_user, _TurnState
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

@@ -26,11 +26,11 @@ import logging
 import shutil
 from pathlib import Path
 from providers.base import ToolDefinition
+from paths import ADDON_SKILLS_DIR
 
 logger = logging.getLogger(__name__)
 
 CORE_SKILLS_DIR = Path(__file__).parent
-from paths import ADDON_SKILLS_DIR
 
 
 class Skill:

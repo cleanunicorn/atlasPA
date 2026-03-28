@@ -10,9 +10,8 @@ import json
 import types
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
-from tests.test_brain import MockProvider, tmp_memory  # noqa: F401 (fixture)
 
 
 # ── DSPy mock helpers ────────────────────────────────────────────────────────

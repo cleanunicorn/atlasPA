@@ -12,7 +12,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from providers.base import BaseLLMProvider, Message, ToolDefinition, LLMResponse
+from providers.base import BaseLLMProvider, Message, LLMResponse
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 from brain.engine import Brain, _TurnState, _clean_response
@@ -112,7 +112,7 @@ def make_brain(
         on_status=None,
         system_suffix="",
     ):
-        from brain.engine import _TurnState, _clean_response, _extract_text
+        from brain.engine import _extract_text
 
         state = _TurnState()
         tools = brain._build_tools(state)

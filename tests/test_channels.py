@@ -4,13 +4,11 @@ tests/test_channels.py
 Tests for Phase 5 channels: Discord and Web UI.
 """
 
-import json
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, patch
 
 from providers.base import LLMResponse
-from tests.test_brain import MockProvider, make_brain, empty_skills, tmp_memory
+from tests.test_brain import make_brain
 
 
 # ── Discord ────────────────────────────────────────────────────────────────────

@@ -14,8 +14,7 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 

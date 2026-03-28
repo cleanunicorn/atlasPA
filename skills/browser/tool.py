@@ -6,7 +6,7 @@ Supports reading page content, clicking, filling forms, extracting elements,
 and taking screenshots.
 """
 
-from pathlib import Path
+from paths import SCREENSHOTS_DIR
 
 PARAMETERS = {
     "type": "object",
@@ -46,8 +46,6 @@ PARAMETERS = {
     },
     "required": ["url"],
 }
-
-from paths import SCREENSHOTS_DIR
 
 SCREENSHOT_DIR = SCREENSHOTS_DIR
 MAX_TEXT_CHARS = 12_000

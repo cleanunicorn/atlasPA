@@ -6,7 +6,6 @@ and Telegram voice handler.
 """
 
 import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 

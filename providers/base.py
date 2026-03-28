@@ -6,9 +6,8 @@ Every provider must implement `complete()` — that's the only contract.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Awaitable
+from collections.abc import Callable, Awaitable
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass

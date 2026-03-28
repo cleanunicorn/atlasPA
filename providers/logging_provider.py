@@ -13,7 +13,6 @@ import os
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from dataclasses import asdict
 
 from collections.abc import Callable, Awaitable
 from .base import BaseLLMProvider, Message, ToolDefinition, LLMResponse

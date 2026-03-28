@@ -6,11 +6,10 @@ Tests for Phase 4: heartbeat scheduler, job persistence, and brain scheduling to
 
 import json
 import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from providers.base import LLMResponse, ToolCall
-from tests.test_brain import MockProvider, make_brain, empty_skills, tmp_memory
+from tests.test_brain import make_brain
 
 
 # ── Job CRUD ──────────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ Each job:
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 from paths import JOBS_FILE
 

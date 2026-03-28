@@ -25,10 +25,10 @@ Usage:
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from paths import MEMORY_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,6 @@ LOG_MAX_ENTRIES = 50
 
 # How many recent *triggered* actions to include in the awareness prompt
 PROMPT_RECENT_ACTIONS = 5
-
-from paths import MEMORY_DIR
 
 LOG_FILE = MEMORY_DIR / "awareness_log.json"
 

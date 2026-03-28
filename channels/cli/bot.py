@@ -54,7 +54,7 @@ class CLIBot:
         print(f"\n{'=' * 50}")
         print(f"  {agent_name} — Personal AI Agent (CLI Mode){resume_note}")
         print(f"{'=' * 50}")
-        print(f"  Commands: /clear, /status, /image <path>, /voice <path>, /quit")
+        print("  Commands: /clear, /status, /image <path>, /voice <path>, /quit")
         print(f"{'=' * 50}\n")
 
         loop = asyncio.get_event_loop()

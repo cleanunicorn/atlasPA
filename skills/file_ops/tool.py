@@ -6,6 +6,8 @@ Read, write, and list files. Sandboxed to ~/agent-files/.
 
 from pathlib import Path
 
+from paths import DATA_DIR
+
 PARAMETERS = {
     "type": "object",
     "properties": {
@@ -27,8 +29,6 @@ PARAMETERS = {
 }
 
 # All file access is sandboxed to this directory
-from paths import DATA_DIR
-
 SANDBOX_DIR = DATA_DIR
 
 

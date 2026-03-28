@@ -12,11 +12,11 @@ Structure:
 import asyncio
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import dspy
 
-from providers.base import BaseLLMProvider, Message, ToolDefinition, LLMResponse
+from providers.base import BaseLLMProvider, Message, LLMResponse
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 from brain.engine import (
@@ -382,8 +382,6 @@ async def test_ask_user_stops_loop_and_returns_question(brain):
         pass
 
     # Inject clarification by patching the state after it's created
-    original_turn_state = _TurnState
-
     class _AskingTurnState(_TurnState):
         def __init__(self):
             super().__init__()
@@ -513,7 +511,7 @@ def test_status_callback_puts_to_queue():
 
 def test_status_callback_tool_start():
     """on_tool_start puts the human-readable tool label into the queue."""
-    from brain.status import AtlasCallback, StatusUpdate
+    from brain.status import AtlasCallback
 
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue(maxsize=64)

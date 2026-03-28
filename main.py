@@ -30,7 +30,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 ROOT = Path(__file__).parent
-from paths import ENV_FILE, CONFIG_DIR  # noqa: E402  (after Path)
+from paths import ENV_FILE  # noqa: E402  (after Path)
 
 ENV_EXAMPLE = ROOT / "config" / ".env.example"  # template stays in repo
 

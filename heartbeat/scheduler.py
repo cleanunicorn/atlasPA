@@ -22,7 +22,6 @@ notify_callback signature:
 import logging
 from collections.abc import Callable, Awaitable
 from datetime import datetime
-from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger

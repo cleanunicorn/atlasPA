@@ -6,9 +6,8 @@ Tests for the addon skill management system:
   - manage_skills built-in tool in Brain
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 # ── SkillRegistry fixtures ─────────────────────────────────────────────────────
@@ -25,7 +24,7 @@ MINIMAL_SKILL_MD = "# echo\n\nEchoes back the input message."
 
 def make_registry(tmp_path: Path):
     """Return a SkillRegistry that only scans tmp_path as both core and addon dir."""
-    from skills.registry import SkillRegistry, CORE_SKILLS_DIR, ADDON_SKILLS_DIR
+    from skills.registry import SkillRegistry
 
     registry = SkillRegistry.__new__(SkillRegistry)
     registry._skills = {}

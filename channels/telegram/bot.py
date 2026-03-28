@@ -9,7 +9,6 @@ Security:
     Set this in your .env to prevent others from using your agent.
 """
 
-import asyncio
 import base64
 import logging
 import os
@@ -32,13 +31,12 @@ from telegram.ext import (
 )
 from memory.history import ConversationHistory
 from channels.telegram.formatting import md_to_html
+from paths import UPLOADS_DIR
 
 # Minimum seconds between Telegram message edits (rate limit: ~20 edits/min/chat)
 _STREAM_EDIT_INTERVAL = 0.6
 
 # Where incoming files are staged before the brain decides what to do with them
-from paths import UPLOADS_DIR
-
 _UPLOAD_DIR = UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
@@ -499,7 +497,6 @@ class TelegramBot:
 
     async def _send_file(self, update: Update, path, caption: str) -> None:
         """Send a file to the user — as a photo if it's an image, document otherwise."""
-        from pathlib import Path
 
         path = Path(path)
         if not path.exists():
@@ -526,7 +523,6 @@ class TelegramBot:
             text:  Message text to send.
             files: Optional list of (Path, caption) tuples to send as attachments.
         """
-        from pathlib import Path
 
         if not self._allowed_users:
             logger.warning(
