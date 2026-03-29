@@ -1,4 +1,4 @@
-# Atlas — Personal AI Agent
+# Atlas — Personal Assistant
 
 A personal AI agent inspired by OpenClaw, built in Python. Model-agnostic, extensible, runs locally.
 
