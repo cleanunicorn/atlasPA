@@ -234,6 +234,51 @@ def _make_reload(state: _TurnState) -> dspy.Tool:
     return dspy.Tool(reload)
 
 
+def _make_run_claude() -> dspy.Tool:
+    def run_claude(prompt: str, workdir: str = "", timeout: int = 120) -> str:
+        """Run the Claude Code CLI with a prompt. Use this for code generation, API exploration, and building skills. Claude Code is a powerful coding assistant that can read files, search codebases, and write high-quality code."""
+        import subprocess
+
+        timeout = min(int(timeout), 300)
+        cmd = ["claude", "-p", "--dangerously-skip-permissions", prompt]
+        if workdir:
+            cwd = Path(workdir).expanduser()
+            if not cwd.is_dir():
+                return f"Error: directory not found: {cwd}"
+        else:
+            cwd = None
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+            )
+            output = result.stdout
+            if result.stderr:
+                output += f"\n[stderr]\n{result.stderr}"
+            if not output.strip():
+                output = f"(no output, exit code {result.returncode})"
+            if len(output) > 16000:
+                half = 8000
+                output = (
+                    output[:half]
+                    + f"\n\n... [{len(output) - 16000} chars truncated] ...\n\n"
+                    + output[-half:]
+                )
+            return output
+        except subprocess.TimeoutExpired:
+            return f"Error: claude CLI timed out after {timeout}s"
+        except FileNotFoundError:
+            return "Error: `claude` CLI not found on PATH. Is it installed?"
+        except Exception as e:
+            return f"Error running claude CLI: {e}"
+
+    return dspy.Tool(run_claude)
+
+
 def _make_manage_skills(skills: SkillRegistry) -> dspy.Tool:
     def manage_skills(
         action: str, name: str = "", skill_md: str = "", tool_py: str = ""

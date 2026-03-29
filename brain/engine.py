@@ -21,7 +21,6 @@ import logging
 import os
 import re
 import sys
-import threading
 from pathlib import Path
 from collections.abc import Callable, Awaitable
 
@@ -49,13 +48,13 @@ from brain.tools import (  # noqa: F401 — re-exported for tests
     _make_reflect,
     _make_reload,
     _make_manage_skills,
+    _make_run_claude,
 )
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 30
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-_RESTART_DELAY = 2.0  # seconds before os.execv
 
 # ── Response sanitisation ────────────────────────────────────────────────────
 
@@ -286,6 +285,8 @@ class Brain:
             _make_reload(state),
             _make_manage_skills(self.skills),
         ]
+        if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
+            tools.append(_make_run_claude())
         # Append skill tools (rebuilt each call to pick up newly installed addons)
         for skill in self.skills._skills.values():
             try:
@@ -362,21 +363,18 @@ class Brain:
             logger.info("Returning clarification question to user.")
             return state.clarification, messages
 
-        # reload was called — schedule restart after delivering response
+        # reload was called — signal the main process to restart cleanly
         if state.restart_requested:
             final_text = _clean_response(prediction.answer or "Restarting…")
             messages.append(Message(role="assistant", content=final_text))
-            logger.info("Reload confirmed — scheduling process restart")
+            logger.info("Reload confirmed — sending SIGTERM for clean restart")
 
-            def _do_restart():
-                import time
+            import signal
 
-                time.sleep(_RESTART_DELAY)
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-
-            threading.Thread(
-                target=_do_restart, daemon=True, name="atlas-reload"
-            ).start()
+            # Signal main.py to re-exec after clean shutdown.
+            # Using env var avoids circular import with main.
+            os.environ["_ATLAS_RESTART"] = "1"
+            os.kill(os.getpid(), signal.SIGTERM)
             return final_text, messages
 
         final_text = _clean_response(prediction.answer or "✅ Done.")

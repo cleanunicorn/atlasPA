@@ -170,3 +170,11 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         sys.exit(0)
+
+    # Brain reload tool sets this env var before sending SIGTERM
+    if os.environ.pop("_ATLAS_RESTART", "") == "1":
+        import time
+
+        logger.info("Restarting…")
+        time.sleep(0.3)
+        os.execv(sys.executable, [sys.executable] + sys.argv)

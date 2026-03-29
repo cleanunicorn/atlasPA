@@ -352,7 +352,7 @@ def run(
         if watcher:
             watcher.stop()
 
-    if _restart_requested:
+    if _restart_requested or os.environ.pop("_ATLAS_RESTART", "") == "1":
         console.print("[green]Restarting…[/green]\n")
         time.sleep(0.3)  # brief pause so the terminal line flushes
         os.execv(sys.executable, [sys.executable] + sys.argv)

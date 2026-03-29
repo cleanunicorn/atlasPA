@@ -318,6 +318,16 @@ class MemoryStore:
         if skills_summary:
             parts.append(f"\n---\n## Available Skills\n{skills_summary}")
 
+        if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
+            parts.append(
+                "\n---\n## Claude Code CLI\n"
+                "The `claude` CLI (Claude Code) is available via the `run_claude` tool.\n"
+                "Use it to generate high-quality code, explore and inspect APIs, "
+                "and build new skills. Prefer `run_claude` over writing code yourself "
+                "when the task involves complex code generation or API exploration.\n"
+                "You can pass a working directory to scope the CLI to a specific project."
+            )
+
         parts.append(
             "\n---\n"
             "When you learn something worth remembering about the user, call `remember`.\n"
