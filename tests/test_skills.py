@@ -186,79 +186,62 @@ async def test_http_request_post_with_body():
 # ── browser ───────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_browser_read_page():
-    """browser skill reads page text content via Playwright."""
-    mock_page = AsyncMock()
-    mock_page.title = AsyncMock(return_value="Test Page")
-    mock_page.goto = AsyncMock()
-    mock_page.wait_for_selector = AsyncMock()
-    mock_page.evaluate = AsyncMock(return_value="This is the page content.")
-    mock_page.query_selector_all = AsyncMock(return_value=[])
-
-    mock_browser = AsyncMock()
-    mock_browser.new_page = AsyncMock(return_value=mock_page)
-    mock_browser.close = AsyncMock()
-
-    mock_chromium = AsyncMock()
-    mock_chromium.launch = AsyncMock(return_value=mock_browser)
-
-    mock_pw = AsyncMock()
-    mock_pw.__aenter__ = AsyncMock(return_value=mock_pw)
-    mock_pw.__aexit__ = AsyncMock(return_value=False)
-    mock_pw.chromium = mock_chromium
-
+def test_browser_read_page():
+    """browser skill reads page text via Playwright (session-based)."""
     from skills.browser.tool import run
 
-    with patch("playwright.async_api.async_playwright", return_value=mock_pw):
-        result = await run("https://example.com", action="read")
+    fake_response = "# Test Page\nURL: https://example.com\n\nThis is the page content.\nsession_id: abc12345"
+    with patch("skills.browser.sessions.run_on_browser_thread", return_value=fake_response):
+        result = run(action="read", url="https://example.com")
 
     assert "Test Page" in result
     assert "page content" in result
+    assert "session_id" in result
 
 
-@pytest.mark.asyncio
-async def test_browser_missing_playwright():
-    """browser skill returns a helpful error if playwright is not installed."""
+def test_browser_missing_playwright():
+    """browser skill returns a helpful error if sessions can't be imported."""
     from skills.browser.tool import run
 
-    with patch.dict("sys.modules", {"playwright": None, "playwright.async_api": None}):
+    # Simulate import failure of the sessions module
+    with patch.dict("sys.modules", {"skills.browser.sessions": None}):
         with patch(
             "builtins.__import__",
             side_effect=ImportError("No module named 'playwright'"),
         ):
-            result = await run("https://example.com")
-    assert "playwright" in result.lower() or "error" in result.lower()
+            result = run(action="read", url="https://example.com")
+    assert "error" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_browser_extract_selector():
-    """browser extract action returns inner text of matching elements."""
-    mock_el1 = AsyncMock()
-    mock_el1.inner_text = AsyncMock(return_value="Item One")
-    mock_el2 = AsyncMock()
-    mock_el2.inner_text = AsyncMock(return_value="Item Two")
-
-    mock_page = AsyncMock()
-    mock_page.goto = AsyncMock()
-    mock_page.query_selector_all = AsyncMock(return_value=[mock_el1, mock_el2])
-
-    mock_browser = AsyncMock()
-    mock_browser.new_page = AsyncMock(return_value=mock_page)
-    mock_browser.close = AsyncMock()
-
-    mock_chromium = AsyncMock()
-    mock_chromium.launch = AsyncMock(return_value=mock_browser)
-
-    mock_pw = AsyncMock()
-    mock_pw.__aenter__ = AsyncMock(return_value=mock_pw)
-    mock_pw.__aexit__ = AsyncMock(return_value=False)
-    mock_pw.chromium = mock_chromium
-
+def test_browser_extract_selector():
+    """browser extract action returns text of matching elements."""
     from skills.browser.tool import run
 
-    with patch("playwright.async_api.async_playwright", return_value=mock_pw):
-        result = await run("https://example.com", action="extract", selector="li")
+    fake_response = "Item One\n---\nItem Two\nsession_id: abc12345"
+    with patch("skills.browser.sessions.run_on_browser_thread", return_value=fake_response):
+        result = run(action="extract", url="https://example.com", selector="li")
 
     assert "Item One" in result
     assert "Item Two" in result
+
+
+def test_browser_session_reuse():
+    """Passing session_id reuses an existing session."""
+    from skills.browser.tool import run
+
+    with patch("skills.browser.sessions.run_on_browser_thread") as mock_dispatch:
+        mock_dispatch.return_value = "Clicked: #btn\nsession_id: abc12345"
+        result = run(action="click", session_id="abc12345", selector="#btn")
+
+    assert "abc12345" in result
+
+
+def test_browser_close_session():
+    """action=close delegates to session manager."""
+    from skills.browser.tool import run
+
+    with patch("skills.browser.sessions.run_on_browser_thread") as mock_dispatch:
+        mock_dispatch.return_value = "Session 'abc12345' closed.\nsession_id: abc12345"
+        result = run(action="close", session_id="abc12345")
+
+    assert "closed" in result.lower()
