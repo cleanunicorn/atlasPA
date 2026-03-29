@@ -23,4 +23,5 @@ HISTORY_DIR = MEMORY_DIR / "history"
 # ── User files ────────────────────────────────────────────────────────────────
 UPLOADS_DIR = DATA_DIR / "uploads"
 SCREENSHOTS_DIR = DATA_DIR / "screenshots"
+DOWNLOADS_DIR = DATA_DIR / "downloads"
 ADDON_SKILLS_DIR = DATA_DIR / "skills"

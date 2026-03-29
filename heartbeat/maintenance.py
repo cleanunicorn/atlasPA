@@ -153,8 +153,10 @@ async def run_maintenance(
 # ── Context consolidation (DSPy) ─────────────────────────────────────────────
 
 
-def _strip_fences(text: str) -> str:
+def _strip_fences(text: str | None) -> str:
     """Remove markdown code fences if the LLM wrapped the output."""
+    if not text:
+        return ""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-z]*\n?", "", text)
@@ -185,6 +187,12 @@ async def _consolidate_context(memory: MemoryStore) -> tuple[int, int]:
     result = await asyncio.to_thread(predict, context_entries=entries_text)
 
     raw = _strip_fences(result.consolidated_json)
+    if not raw:
+        raise ValueError(
+            "LLM returned empty/None for consolidated_json — "
+            "model may not support structured output via DSPy"
+        )
+
     consolidated = json.loads(raw)
 
     if not isinstance(consolidated, list) or len(consolidated) == 0:
@@ -233,6 +241,12 @@ async def _consolidate_awareness() -> tuple[int, int]:
     result = await asyncio.to_thread(predict, log_entries=json.dumps(entries, indent=2))
 
     raw = _strip_fences(result.keep_indices_json)
+    if not raw:
+        raise ValueError(
+            "LLM returned empty/None for keep_indices_json — "
+            "model may not support structured output via DSPy"
+        )
+
     keep_indices = set(json.loads(raw))
 
     # Validate indices

@@ -175,6 +175,54 @@ def test_clean_response_collapses_blank_lines():
     assert "\n\n\n" not in result
 
 
+# ── Unit: AtlasReAct._parse_tool_args ─────────────────────────────────────────
+
+
+def test_parse_tool_args_dict_passthrough():
+    """A dict input is returned as-is."""
+    from brain.engine import AtlasReAct
+
+    assert AtlasReAct._parse_tool_args({"key": "value"}) == {"key": "value"}
+
+
+def test_parse_tool_args_valid_json_string():
+    """A valid JSON string is parsed into a dict."""
+    from brain.engine import AtlasReAct
+
+    assert AtlasReAct._parse_tool_args('{"a": 1, "b": "two"}') == {"a": 1, "b": "two"}
+
+
+def test_parse_tool_args_malformed_json_repaired():
+    """Malformed JSON is repaired via json_repair."""
+    from brain.engine import AtlasReAct
+
+    # Missing closing brace — json_repair should fix it
+    result = AtlasReAct._parse_tool_args('{"key": "value"')
+    assert result == {"key": "value"}
+
+
+def test_parse_tool_args_non_dict_returns_empty():
+    """If the parsed result is not a dict (e.g. a list or string), return {}."""
+    from brain.engine import AtlasReAct
+
+    assert AtlasReAct._parse_tool_args("[1, 2, 3]") == {}
+    assert AtlasReAct._parse_tool_args('"just a string"') == {}
+
+
+def test_parse_tool_args_empty_string():
+    """An empty string returns {}."""
+    from brain.engine import AtlasReAct
+
+    assert AtlasReAct._parse_tool_args("") == {}
+
+
+def test_parse_tool_args_none():
+    """None input returns {}."""
+    from brain.engine import AtlasReAct
+
+    assert AtlasReAct._parse_tool_args(None) == {}
+
+
 # ── Unit: _run_skill_sync ─────────────────────────────────────────────────────
 
 

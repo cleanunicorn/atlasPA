@@ -269,6 +269,55 @@ async def test_consolidate_context_aborts_on_empty_result(tmp_memory):
     assert len(entries_after) == len(entries_before)
 
 
+@pytest.mark.asyncio
+async def test_consolidate_context_none_from_dspy(tmp_memory):
+    """Consolidation raises ValueError (not AttributeError) when DSPy returns None."""
+    from heartbeat.maintenance import _consolidate_context
+
+    for i in range(6):
+        tmp_memory.append_context(f"Entry {i}.")
+
+    entries_before = tmp_memory.parse_context_entries()
+
+    # Simulate DSPy returning None for the output field (LLM server down, etc.)
+    with (
+        patch(
+            "heartbeat.maintenance.dspy.ChainOfThought",
+            _make_mock_cot(None),
+        ),
+        pytest.raises(ValueError, match="empty/None"),
+    ):
+        await _consolidate_context(tmp_memory)
+
+    # Memory must be unchanged
+    entries_after = tmp_memory.parse_context_entries()
+    assert len(entries_after) == len(entries_before)
+
+
+@pytest.mark.asyncio
+async def test_consolidate_awareness_none_from_dspy(tmp_path):
+    """Awareness consolidation raises ValueError (not AttributeError) when DSPy returns None."""
+    from heartbeat.maintenance import _consolidate_awareness
+
+    log_file = tmp_path / "awareness_log.json"
+    entries = []
+    for i in range(12):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=12 - i)).isoformat()
+        entries.append({"ts": ts, "triggered": False, "summary": "no action"})
+    log_file.write_text(json.dumps(entries))
+
+    with (
+        patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
+        patch("heartbeat.maintenance.dspy.Predict", _make_mock_predict(None)),
+        pytest.raises(ValueError, match="empty/None"),
+    ):
+        await _consolidate_awareness()
+
+    # Log must be unchanged
+    remaining = json.loads(log_file.read_text())
+    assert len(remaining) == 12
+
+
 # ── Awareness consolidation (DSPy) ──────────────────────────────────────────
 
 

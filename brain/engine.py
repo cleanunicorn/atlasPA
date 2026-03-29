@@ -82,20 +82,46 @@ def _clean_response(text: str) -> str:
 
 
 class AtlasReAct(dspy.ReAct):
-    """ReAct subclass that gracefully handles AdapterParseError.
+    """ReAct subclass that enables structured outputs and handles AdapterParseError.
 
-    DSPy's ReAct.forward() only catches ValueError when the LLM produces a
-    malformed response.  AdapterParseError (raised when the LLM outputs raw
-    tool args instead of the expected {next_thought, next_tool_name,
-    next_tool_args} structure) extends Exception directly, so it crashes the
-    entire loop.  This subclass widens the catch so the loop can break
-    gracefully and still produce a final answer from the accumulated trajectory.
+    Two layers of protection against malformed LLM responses:
 
-    The extract step (final answer generation) can also fail with
-    AdapterParseError when the LLM returns a plain-text answer instead of
-    the expected JSON {reasoning, answer}.  In that case the raw LLM text
-    is used directly as the answer.
+    1. **Structured outputs**: The parent's react signature types next_tool_args
+       as dict[str, Any], which triggers _has_open_ended_mapping() in the
+       JSONAdapter and forces a fallback to weak {"type": "json_object"} mode.
+       We retype that field to str so full structured output schema validation
+       is used when the model supports it.
+
+    2. **Graceful fallback**: AdapterParseError (not a ValueError) is caught in
+       both the iteration loop and the extract step, so a single malformed
+       response doesn't crash the entire request.
     """
+
+    def __init__(self, signature, tools, max_iters=20):
+        super().__init__(signature, tools, max_iters=max_iters)
+        # Retype next_tool_args from dict[str, Any] → str so the JSONAdapter
+        # can generate a full structured output schema instead of falling back
+        # to weak json_object mode.
+        self.react.signature = self.react.signature.with_updated_fields(
+            "next_tool_args", type_=str
+        )
+
+    @staticmethod
+    def _parse_tool_args(raw) -> dict:
+        """Parse next_tool_args from JSON string to dict."""
+        if isinstance(raw, dict):
+            return raw
+        if not raw:
+            return {}
+        try:
+            parsed = _json.loads(raw)
+        except (_json.JSONDecodeError, TypeError):
+            import json_repair
+
+            parsed = json_repair.loads(raw)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
 
     def forward(self, **input_args):
         from dspy.predict.react import _fmt_exc
@@ -114,14 +140,15 @@ class AtlasReAct(dspy.ReAct):
                 )
                 break
 
+            tool_args = self._parse_tool_args(pred.next_tool_args)
             trajectory[f"thought_{idx}"] = pred.next_thought
             trajectory[f"tool_name_{idx}"] = pred.next_tool_name
-            trajectory[f"tool_args_{idx}"] = pred.next_tool_args
+            trajectory[f"tool_args_{idx}"] = tool_args
 
             try:
                 trajectory[f"observation_{idx}"] = self.tools[
                     pred.next_tool_name
-                ](**pred.next_tool_args)
+                ](**tool_args)
             except Exception as err:
                 trajectory[f"observation_{idx}"] = (
                     f"Execution error in {pred.next_tool_name}: {_fmt_exc(err)}"
