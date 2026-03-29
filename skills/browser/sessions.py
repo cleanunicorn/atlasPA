@@ -43,22 +43,33 @@ _HARD_TIMEOUT = 300  # seconds — run_on_browser_thread gives up
 
 _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
+_started = threading.Event()
 _lock = threading.Lock()
+
+
+def _run_loop(loop: asyncio.AbstractEventLoop):
+    """Target for the browser daemon thread."""
+    asyncio.set_event_loop(loop)
+    _started.set()
+    loop.run_forever()
 
 
 def _ensure_thread() -> asyncio.AbstractEventLoop:
     """Start the browser daemon thread if not already running."""
     global _loop, _thread
     with _lock:
-        if _loop is not None and _loop.is_running():
+        if _loop is not None and _thread is not None and _thread.is_alive():
             return _loop
         _loop = asyncio.new_event_loop()
+        _started.clear()
         _thread = threading.Thread(
-            target=_loop.run_forever,
+            target=_run_loop,
+            args=(_loop,),
             daemon=True,
             name="atlas-browser-loop",
         )
         _thread.start()
+        _started.wait()  # block until run_forever() is active
         return _loop
 
 
@@ -206,8 +217,10 @@ class SessionManager:
         loop.call_later(_CLEANUP_INTERVAL, self._run_cleanup)
 
     def _run_cleanup(self):
+        """Called by loop.call_later on the browser thread — schedule the async cleanup."""
         self._cleanup_scheduled = False
-        asyncio.ensure_future(self._cleanup_idle(), loop=_ensure_thread())
+        # We're already on the browser thread's event loop, so get_event_loop works.
+        asyncio.ensure_future(self._cleanup_idle())
 
 
 # ── atexit shutdown ─────────────────────────────────────────────────────────
@@ -246,6 +259,8 @@ async def execute_action(
     manager = _get_manager()
     timeout_ms = min(int(timeout), 120) * 1000
 
+    logger.info(f"Browser action={action} session={session_id or '(new)'} url={url[:80] if url else ''}")
+
     # Close doesn't need a live page
     if action == "close":
         if not session_id:
@@ -262,11 +277,14 @@ async def execute_action(
 
     # Navigate if url provided and (goto action or new session)
     if url and (action == "goto" or is_new_session):
+        logger.info(f"Navigating to {url[:120]} (session {session.session_id})")
         try:
             await session.page.goto(
                 url, timeout=timeout_ms, wait_until="domcontentloaded"
             )
+            logger.info(f"Navigation complete (session {session.session_id})")
         except PWTimeout:
+            logger.warning(f"Navigation timed out: {url[:120]}")
             return (
                 f"Error: page load timed out after {timeout}s — {url}\n"
                 f"session_id: {session.session_id}"
@@ -282,7 +300,9 @@ async def execute_action(
         await asyncio.sleep(min(float(wait_seconds), 30))
 
     # Dispatch
+    logger.info(f"Dispatching action={action} (session {session.session_id})")
     result = await _dispatch(session, action, selector, value, tab_id, url, timeout_ms)
+    logger.info(f"Action {action} complete (session {session.session_id}, {len(result)} chars)")
     return f"{result}\nsession_id: {session.session_id}"
 
 
