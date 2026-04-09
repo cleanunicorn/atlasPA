@@ -255,7 +255,9 @@ class TelegramBot:
         )
 
         # Build a context message for the brain
+        reply_ctx = self._build_reply_context(update)
         user_message = (
+            f"{reply_ctx}"
             f"[System: the user sent a file named '{filename}' "
             f"which has been saved to {save_path}]\n"
             f"{caption if caption else 'Please help me set up or use this file.'}"
@@ -338,12 +340,14 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Transcription failed for {filename}: {e}")
 
+        reply_ctx = self._build_reply_context(update)
         if transcript:
-            user_message = transcript
+            user_message = f"{reply_ctx}{transcript}"
             if caption:
-                user_message = f"{transcript}\n\n[User note: {caption}]"
+                user_message = f"{reply_ctx}{transcript}\n\n[User note: {caption}]"
         else:
             user_message = (
+                f"{reply_ctx}"
                 f"[System: the user sent a voice/audio message saved to {save_path}. "
                 "Transcription is unavailable — nemo_toolkit may not be installed.]\n"
                 f"{caption or 'The user sent an audio message.'}"
@@ -393,8 +397,11 @@ class TelegramBot:
 
         image_data = base64.b64encode(image_bytes).decode()
 
-        # Build multimodal content: optional text caption + image block
+        # Build multimodal content: optional reply context + text caption + image block
         content: list = []
+        reply_ctx = self._build_reply_context(update)
+        if reply_ctx:
+            content.append({"type": "text", "text": reply_ctx.rstrip()})
         if caption:
             content.append({"type": "text", "text": caption})
         content.append(
@@ -416,13 +423,55 @@ class TelegramBot:
             logger.exception("Error processing photo")
             await update.message.reply_text(f"⚠️ Something went wrong: {e}")
 
+    @staticmethod
+    def _build_reply_context(update: Update) -> str:
+        """
+        If the incoming message is a reply to another message, return a string
+        describing the original message so the brain has context.
+
+        Returns an empty string when the message is not a reply.
+        """
+        replied = update.message.reply_to_message
+        if not replied:
+            return ""
+
+        # Prefer plain text, then caption (media messages), then media type label
+        if replied.text:
+            quoted = replied.text
+        elif replied.caption:
+            quoted = replied.caption
+        elif replied.photo:
+            quoted = "[photo]"
+        elif replied.document:
+            name = getattr(replied.document, "file_name", None) or "file"
+            quoted = f"[document: {name}]"
+        elif replied.voice or replied.audio:
+            quoted = "[voice/audio message]"
+        elif replied.sticker:
+            quoted = f"[sticker: {replied.sticker.emoji or ''}]"
+        else:
+            quoted = "[message]"
+
+        # Truncate very long quoted messages to keep the prompt readable
+        if len(quoted) > 300:
+            quoted = quoted[:297] + "…"
+
+        sender = ""
+        if replied.from_user:
+            sender = replied.from_user.first_name or replied.from_user.username or ""
+
+        if sender:
+            return f'[Replying to {sender}: "{quoted}"]\n'
+        return f'[Replying to: "{quoted}"]\n'
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("⛔ Unauthorized.")
             return
 
-        user_text = update.message.text
+        reply_ctx = self._build_reply_context(update)
+        user_text = (reply_ctx + update.message.text) if reply_ctx else update.message.text
         user_id = str(user.id)
 
         logger.info(f"Message from {user.username or user.id}: {user_text[:100]}")

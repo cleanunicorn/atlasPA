@@ -251,3 +251,121 @@ async def test_web_push_message_logs(tmp_memory, empty_skills, caplog):
         await bot.push_message("Proactive!", [])
 
     assert any("push" in r.message.lower() for r in caplog.records)
+
+
+# ── Telegram reply context ──────────────────────────────────────────────────────
+
+
+def _make_telegram_bot(brain):
+    """Create a TelegramBot with a fake token (no real connection)."""
+    with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "fake-token-for-tests"}):
+        with patch("channels.telegram.bot.Application"):
+            from channels.telegram.bot import TelegramBot
+
+            bot = TelegramBot(brain=brain)
+    return bot
+
+
+def _make_update(replied_text=None, replied_caption=None, replied_media=None, sender_name=None):
+    """Build a minimal mock Update with an optional reply_to_message."""
+    from unittest.mock import MagicMock
+
+    update = MagicMock()
+
+    if replied_text is None and replied_caption is None and replied_media is None:
+        update.message.reply_to_message = None
+        return update
+
+    replied = MagicMock()
+    replied.text = replied_text
+    replied.caption = replied_caption
+
+    # Set all media attributes to None by default
+    replied.photo = None
+    replied.document = None
+    replied.voice = None
+    replied.audio = None
+    replied.sticker = None
+
+    if replied_media == "photo":
+        replied.photo = MagicMock()
+    elif replied_media == "document":
+        doc = MagicMock()
+        doc.file_name = "report.pdf"
+        replied.document = doc
+    elif replied_media == "voice":
+        replied.voice = MagicMock()
+
+    if sender_name:
+        replied.from_user = MagicMock()
+        replied.from_user.first_name = sender_name
+        replied.from_user.username = sender_name
+    else:
+        replied.from_user = None
+
+    update.message.reply_to_message = replied
+    return update
+
+
+def test_telegram_build_reply_context_no_reply(tmp_memory, empty_skills):
+    """Returns empty string when the message is not a reply."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    update = _make_update()
+    assert bot._build_reply_context(update) == ""
+
+
+def test_telegram_build_reply_context_text_reply(tmp_memory, empty_skills):
+    """Quoted text appears in the context string."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    update = _make_update(replied_text="What's the weather today?", sender_name="Alice")
+    ctx = bot._build_reply_context(update)
+    assert "Alice" in ctx
+    assert "What's the weather today?" in ctx
+
+
+def test_telegram_build_reply_context_no_sender(tmp_memory, empty_skills):
+    """Works correctly when the sender name is unavailable."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    update = _make_update(replied_text="Hello world")
+    ctx = bot._build_reply_context(update)
+    assert "Hello world" in ctx
+    assert ctx.startswith("[Replying to:")
+
+
+def test_telegram_build_reply_context_photo_reply(tmp_memory, empty_skills):
+    """Returns [photo] label when replying to a photo with no caption."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    update = _make_update(replied_media="photo")
+    ctx = bot._build_reply_context(update)
+    assert "[photo]" in ctx
+
+
+def test_telegram_build_reply_context_document_reply(tmp_memory, empty_skills):
+    """Returns file name label when replying to a document."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    update = _make_update(replied_media="document")
+    ctx = bot._build_reply_context(update)
+    assert "report.pdf" in ctx
+
+
+def test_telegram_build_reply_context_truncates_long_text(tmp_memory, empty_skills):
+    """Very long quoted messages are truncated at 300 characters."""
+    brain, _ = make_brain([], tmp_memory, empty_skills)
+    bot = _make_telegram_bot(brain)
+
+    long_text = "a" * 500
+    update = _make_update(replied_text=long_text)
+    ctx = bot._build_reply_context(update)
+    # The context string itself will be longer than 300 due to prefix, but quoted portion ≤ 300
+    assert "…" in ctx
+    assert long_text[:50] in ctx
