@@ -412,6 +412,110 @@ async def test_handle_voice_unauthorized():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Telegram photo handler
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def make_photo_update(caption=""):
+    update = MagicMock()
+    update.effective_user.id = 1
+    update.effective_user.username = "testuser"
+    # Telegram sends multiple resolutions; _handle_photo uses [-1]
+    tg_file = AsyncMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake_image_bytes"))
+    photo = MagicMock()
+    photo.get_file = AsyncMock(return_value=tg_file)
+    update.message.photo = [MagicMock(), photo]
+    update.message.caption = caption
+    update.message.reply_text = AsyncMock()
+    update.message.reply_to_message = None
+    update.message.chat.send_action = AsyncMock()
+    return update
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_sends_multimodal_to_brain():
+    """Photo is base64-encoded and passed to brain as a multimodal content list."""
+    bot = make_tg_bot()
+    update = make_photo_update(caption="what is this?")
+
+    mock_stream = AsyncMock(return_value=("It's a cat!", []))
+    with patch.object(bot, "_stream_think", new=mock_stream):
+        await bot._handle_photo(update, MagicMock())
+
+    mock_stream.assert_called_once()
+    content = mock_stream.call_args.args[1]
+    assert isinstance(content, list)
+    assert any(b.get("type") == "image" for b in content)
+    assert any(b.get("text") == "what is this?" for b in content if b.get("type") == "text")
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_vision_not_supported_falls_back_to_text():
+    """When model rejects image input, bot retries with a text-only fallback."""
+    bot = make_tg_bot()
+    update = make_photo_update(caption="describe this")
+
+    call_count = 0
+
+    async def mock_stream_think(upd, content, history):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception(
+                "Error code: 500 - {'error': {'message': "
+                "'image input is not supported - hint: if this is unexpected, "
+                "you may need to provide the mmproj'}}"
+            )
+        return ("Your model doesn't support vision.", [])
+
+    with patch.object(bot, "_stream_think", new=mock_stream_think):
+        await bot._handle_photo(update, MagicMock())
+
+    assert call_count == 2, "Should have retried once with text fallback"
+    bot._history.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_vision_not_supported_no_caption():
+    """Fallback works even when there is no caption."""
+    bot = make_tg_bot()
+    update = make_photo_update(caption="")
+
+    call_count = 0
+
+    async def mock_stream_think(upd, content, history):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("image input is not supported - mmproj missing")
+        return ("Your model doesn't support vision.", [])
+
+    with patch.object(bot, "_stream_think", new=mock_stream_think):
+        await bot._handle_photo(update, MagicMock())
+
+    assert call_count == 2
+    bot._history.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_other_error_reported_to_user():
+    """Non-vision errors surface directly to the user as an error message."""
+    bot = make_tg_bot()
+    update = make_photo_update()
+
+    async def mock_stream_think(upd, content, history):
+        raise Exception("some unexpected internal error")
+
+    with patch.object(bot, "_stream_think", new=mock_stream_think):
+        await bot._handle_photo(update, MagicMock())
+
+    update.message.reply_text.assert_called()
+    reply_text = update.message.reply_text.call_args.args[0]
+    assert "some unexpected internal error" in reply_text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Discord audio handling
 # ══════════════════════════════════════════════════════════════════════════════
 

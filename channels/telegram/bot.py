@@ -420,8 +420,29 @@ class TelegramBot:
                 await self._send_file(update, path, cap)
 
         except Exception as e:
-            logger.exception("Error processing photo")
-            await update.message.reply_text(f"⚠️ Something went wrong: {e}")
+            error_str = str(e).lower()
+            if "image input is not supported" in error_str or "mmproj" in error_str:
+                # Model doesn't support vision — fall back to text-only with a helpful note
+                logger.warning("Model does not support vision input, falling back to text-only: %s", e)
+                fallback_text = (
+                    f"{self._build_reply_context(update)}"
+                    "[System: The user sent an image but the current model does not support "
+                    "vision/multimodal input. Inform the user clearly that their configured "
+                    "model cannot process images, and suggest switching to a vision-capable "
+                    "model (e.g. llava for Ollama, gpt-4o, claude-3-*, or gemini).]\n"
+                    + (caption or "The user sent an image without a caption.")
+                )
+                try:
+                    response_text, updated_history = await self._stream_think(
+                        update, fallback_text, history
+                    )
+                    self._history.save(user_id, updated_history)
+                except Exception as fallback_err:
+                    logger.exception("Error in vision fallback")
+                    await update.message.reply_text(f"⚠️ Something went wrong: {fallback_err}")
+            else:
+                logger.exception("Error processing photo")
+                await update.message.reply_text(f"⚠️ Something went wrong: {e}")
 
     @staticmethod
     def _build_reply_context(update: Update) -> str:
