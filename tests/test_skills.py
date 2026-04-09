@@ -191,7 +191,9 @@ def test_browser_read_page():
     from skills.browser.tool import run
 
     fake_response = "# Test Page\nURL: https://example.com\n\nThis is the page content.\nsession_id: abc12345"
-    with patch("skills.browser.sessions.run_on_browser_thread", return_value=fake_response):
+    with patch(
+        "skills.browser.sessions.run_on_browser_thread", return_value=fake_response
+    ):
         result = run(action="read", url="https://example.com")
 
     assert "Test Page" in result
@@ -218,7 +220,9 @@ def test_browser_extract_selector():
     from skills.browser.tool import run
 
     fake_response = "Item One\n---\nItem Two\nsession_id: abc12345"
-    with patch("skills.browser.sessions.run_on_browser_thread", return_value=fake_response):
+    with patch(
+        "skills.browser.sessions.run_on_browser_thread", return_value=fake_response
+    ):
         result = run(action="extract", url="https://example.com", selector="li")
 
     assert "Item One" in result

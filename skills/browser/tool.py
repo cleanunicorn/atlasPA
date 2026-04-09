@@ -123,8 +123,7 @@ def run(
         from skills.browser.sessions import run_on_browser_thread, execute_action
     except ImportError as e:
         return (
-            f"Error: {e}\n"
-            "Run: uv add playwright && uv run playwright install chromium"
+            f"Error: {e}\nRun: uv add playwright && uv run playwright install chromium"
         )
 
     try:

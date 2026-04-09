@@ -1,18 +1,20 @@
 """
 brain/engine.py
 
-The Brain — implements the ReAct (Reason + Act) loop via DSPy.
+The Brain — implements a ReAct (Reason + Act) loop using the provider's
+native tool-calling API.
 
-DSPy's dspy.ReAct module handles the reasoning/acting cycle. Atlas skills
-and built-in tools are wrapped as dspy.Tool instances and passed in each turn.
+No DSPy dependency.  The loop calls provider.complete() iteratively,
+executing tool calls until the model produces a final text response.
 
 Key design notes:
-  - DSPy is synchronous; think() bridges via asyncio.to_thread().
-  - Async skill run() functions are bridged with a fresh event loop per call.
-  - Built-in tools close over a per-turn _TurnState to propagate side-effects
-    (file queuing, clarifications, plan tracking) back to the async caller.
-  - on_token streaming is not supported by DSPy; the parameter is accepted for
-    interface compatibility but never called.
+  - Natively async — no thread bridging needed.
+  - Tools are BrainTool instances (brain/tools.py) converted to
+    ToolDefinition for the provider.
+  - Async skill run() functions are bridged with a fresh event loop
+    in a worker thread (via asyncio.to_thread).
+  - Built-in tools close over a per-turn _TurnState to propagate
+    side-effects (file queuing, clarifications, plan tracking).
 """
 
 import asyncio
@@ -20,19 +22,16 @@ import json as _json
 import logging
 import os
 import re
-import sys
 from pathlib import Path
 from collections.abc import Callable, Awaitable
 
-import dspy
-from dspy.utils.exceptions import AdapterParseError
-
-from providers.base import BaseLLMProvider, Message
+from providers.base import BaseLLMProvider, Message, ToolCall
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 
-from brain.status import AtlasCallback, drain_status
+from brain.status import _tool_status_message
 from brain.tools import (  # noqa: F401 — re-exported for tests
+    BrainTool,
     _TurnState,
     _run_skill_sync,
     _make_skill_tool,
@@ -77,145 +76,7 @@ def _clean_response(text: str) -> str:
     return text.strip()
 
 
-# ── Resilient ReAct subclass ─────────────────────────────────────────────────
-
-
-class AtlasReAct(dspy.ReAct):
-    """ReAct subclass that enables structured outputs and handles AdapterParseError.
-
-    Two layers of protection against malformed LLM responses:
-
-    1. **Structured outputs**: The parent's react signature types next_tool_args
-       as dict[str, Any], which triggers _has_open_ended_mapping() in the
-       JSONAdapter and forces a fallback to weak {"type": "json_object"} mode.
-       We retype that field to str so full structured output schema validation
-       is used when the model supports it.
-
-    2. **Graceful fallback**: AdapterParseError (not a ValueError) is caught in
-       both the iteration loop and the extract step, so a single malformed
-       response doesn't crash the entire request.
-    """
-
-    def __init__(self, signature, tools, max_iters=20):
-        super().__init__(signature, tools, max_iters=max_iters)
-        # Retype next_tool_args from dict[str, Any] → str so the JSONAdapter
-        # can generate a full structured output schema instead of falling back
-        # to weak json_object mode.
-        self.react.signature = self.react.signature.with_updated_fields(
-            "next_tool_args", type_=str
-        )
-
-    @staticmethod
-    def _parse_tool_args(raw) -> dict:
-        """Parse next_tool_args from JSON string to dict."""
-        if isinstance(raw, dict):
-            return raw
-        if not raw:
-            return {}
-        try:
-            parsed = _json.loads(raw)
-        except (_json.JSONDecodeError, TypeError):
-            import json_repair
-
-            parsed = json_repair.loads(raw)
-        if not isinstance(parsed, dict):
-            return {}
-        return parsed
-
-    def forward(self, **input_args):
-        from dspy.predict.react import _fmt_exc
-
-        trajectory = {}
-        max_iters = input_args.pop("max_iters", self.max_iters)
-        for idx in range(max_iters):
-            try:
-                pred = self._call_with_potential_trajectory_truncation(
-                    self.react, trajectory, **input_args
-                )
-            except (ValueError, AdapterParseError) as err:
-                logger.warning(
-                    "Ending the trajectory: Agent failed to select a valid "
-                    f"tool: {_fmt_exc(err)}"
-                )
-                break
-
-            tool_args = self._parse_tool_args(pred.next_tool_args)
-            trajectory[f"thought_{idx}"] = pred.next_thought
-            trajectory[f"tool_name_{idx}"] = pred.next_tool_name
-            trajectory[f"tool_args_{idx}"] = tool_args
-
-            try:
-                trajectory[f"observation_{idx}"] = self.tools[
-                    pred.next_tool_name
-                ](**tool_args)
-            except Exception as err:
-                trajectory[f"observation_{idx}"] = (
-                    f"Execution error in {pred.next_tool_name}: {_fmt_exc(err)}"
-                )
-
-            if pred.next_tool_name == "finish":
-                break
-
-        try:
-            extract = self._call_with_potential_trajectory_truncation(
-                self.extract, trajectory, **input_args
-            )
-            return dspy.Prediction(trajectory=trajectory, **extract)
-        except AdapterParseError as err:
-            logger.warning(
-                "Extract step failed to parse LLM response as JSON; "
-                "using raw LLM text as answer."
-            )
-            raw = err.lm_response or ""
-            output_keys = list(self.signature.output_fields.keys())
-            fallback = {k: "" for k in output_keys}
-            fallback[output_keys[-1]] = raw
-            return dspy.Prediction(trajectory=trajectory, **fallback)
-
-
-# ── DSPy Signature ───────────────────────────────────────────────────────────
-
-
-class AtlasSignature(dspy.Signature):
-    """You are Atlas, a personal AI assistant. Reason carefully, use tools as
-    needed, and give a helpful final answer.
-    If ask_user returns '__ASK_USER__', immediately call finish and set the
-    answer field to the clarifying question verbatim."""
-
-    system_prompt: str = dspy.InputField(
-        desc="Your identity, long-term memory about the user, available skills, and current time."
-    )
-    conversation_history: str = dspy.InputField(
-        desc="Prior conversation context as 'Role: content' lines."
-    )
-    user_message: str = dspy.InputField(desc="The user's current message.")
-    answer: str = dspy.OutputField(desc="Your final response to the user.")
-
-
-# ── LM configuration ────────────────────────────────────────────────────────
-
-
-def _build_dspy_lm() -> dspy.LM:
-    """Map Atlas env vars to a DSPy LM (via LiteLLM)."""
-    provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
-    max_tokens = MAX_TOKENS
-    if provider == "anthropic":
-        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-        return dspy.LM(f"anthropic/{model}", max_tokens=max_tokens)
-    if provider == "openai":
-        model = os.getenv("OPENAI_MODEL", "gpt-4o")
-        return dspy.LM(f"openai/{model}", max_tokens=max_tokens)
-    if provider == "ollama":
-        model = os.getenv("OLLAMA_MODEL", "llama3.2")
-        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        return dspy.LM(f"ollama_chat/{model}", api_base=base, max_tokens=max_tokens)
-    if provider == "openrouter":
-        model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4-5")
-        return dspy.LM(f"openrouter/{model}", max_tokens=max_tokens)
-    raise ValueError(f"Unknown LLM_PROVIDER: {provider!r}")
-
-
-# ── History serialisation ────────────────────────────────────────────────────
+# ── Helper: extract text from multimodal content ────────────────────────────
 
 
 def _extract_text(content: str | list) -> str:
@@ -225,19 +86,24 @@ def _extract_text(content: str | list) -> str:
     return " ".join(b.get("text", "") for b in content if b.get("type") == "text")
 
 
-def _serialize_history(messages: list[Message]) -> str:
-    """Flatten conversation history to a plain string for DSPy context."""
-    lines = []
-    for msg in messages:
-        if msg.role == "user":
-            lines.append(f"User: {_extract_text(msg.content)}")
-        elif msg.role == "assistant" and not msg.tool_calls:
-            lines.append(f"Assistant: {msg.content or ''}")
-        elif msg.role == "assistant" and msg.tool_calls:
-            names = [tc["name"] for tc in (msg.tool_calls or [])]
-            lines.append(f"Assistant: [used tools: {', '.join(names)}]")
-        # tool result messages omitted — DSPy manages its own trajectory
-    return "\n".join(lines) or "(no previous conversation)"
+# ── Helper: execute a tool call ─────────────────────────────────────────────
+
+
+async def _execute_tool(tool_map: dict[str, BrainTool], tc: ToolCall) -> str:
+    """Execute a tool call and return the result string."""
+    tool = tool_map.get(tc.name)
+    if tool is None:
+        return f"Error: unknown tool '{tc.name}'"
+
+    try:
+        result = tool.func(**tc.arguments)
+        # Handle async tool functions
+        if asyncio.iscoroutine(result):
+            result = await result
+        return str(result)
+    except Exception as e:
+        logger.warning(f"Tool {tc.name} raised: {e}")
+        return f"Error in {tc.name}: {e}"
 
 
 # ── Brain ────────────────────────────────────────────────────────────────────
@@ -245,16 +111,16 @@ def _serialize_history(messages: list[Message]) -> str:
 
 class Brain:
     """
-    DSPy-based ReAct reasoning engine.
+    ReAct reasoning engine using native tool calling.
 
-    Wraps dspy.ReAct with Atlas's skill registry, memory, and built-in tools.
-    Public interface is identical to the previous hand-rolled engine.
+    Wraps provider.complete() with Atlas's skill registry, memory,
+    and built-in tools.  Public interface is identical to the previous engine.
     """
 
     def __init__(
         self, provider: BaseLLMProvider, memory: MemoryStore, skills: SkillRegistry
     ):
-        self.provider = provider  # kept for extract() which calls provider directly
+        self.provider = provider
         self.memory = memory
         self.skills = skills
         self._pending_files: list[tuple[Path, str]] = []
@@ -262,14 +128,11 @@ class Brain:
         self.heartbeat = None
         self._session_tokens: dict[str, int] = {"input": 0, "output": 0}
 
-        self._status_callback = AtlasCallback()
-        lm = _build_dspy_lm()
-        dspy.configure(lm=lm, callbacks=[self._status_callback])
-        logger.info(f"DSPy configured: {lm.model}")
+        logger.info(f"Brain ready: {provider.model_name}")
 
     # ── Tool construction ────────────────────────────────────────────────────
 
-    def _build_tools(self, state: _TurnState) -> list[dspy.Tool]:
+    def _build_tools(self, state: _TurnState) -> list[BrainTool]:
         """Build the full tool list for one turn: built-ins + skills."""
         tools = [
             _make_remember(self.memory),
@@ -292,8 +155,94 @@ class Brain:
             try:
                 tools.append(_make_skill_tool(skill))
             except Exception as e:
-                logger.warning(f"Could not wrap skill '{skill.name}' as DSPy tool: {e}")
+                logger.warning(f"Could not wrap skill '{skill.name}': {e}")
         return tools
+
+    # ── ReAct loop ──────────────────────────────────────────────────────────
+
+    async def _react_loop(
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[BrainTool],
+        state: _TurnState,
+        on_status: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        """
+        Run the ReAct loop: call LLM, execute tools, repeat until text response.
+
+        Returns the model's final text answer.
+        """
+        tool_map = {t.name: t for t in tools}
+        tool_defs = [t.to_definition() for t in tools]
+
+        for i in range(MAX_ITERATIONS):
+            if on_status:
+                try:
+                    await on_status("Thinking...")
+                except Exception:
+                    pass
+
+            response = await self.provider.complete(
+                messages=messages,
+                tools=tool_defs,
+                system=system,
+                max_tokens=MAX_TOKENS,
+            )
+
+            # Track token usage
+            if response.usage:
+                self._session_tokens["input"] += response.usage.get("input_tokens", 0)
+                self._session_tokens["output"] += response.usage.get("output_tokens", 0)
+
+            # No tool calls → final answer
+            if not response.tool_calls:
+                return response.content or "Done."
+
+            # Append assistant message with tool calls
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=[
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                        for tc in response.tool_calls
+                    ],
+                )
+            )
+
+            # Execute each tool call
+            for tc in response.tool_calls:
+                if on_status:
+                    status_msg = _tool_status_message(tc.name)
+                    if status_msg:
+                        try:
+                            await on_status(status_msg)
+                        except Exception:
+                            pass
+
+                result = await _execute_tool(tool_map, tc)
+
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=result,
+                        tool_call_id=tc.id,
+                    )
+                )
+
+                # Early exit: ask_user or reload
+                if state.clarification or state.restart_requested:
+                    return response.content or ""
+
+            logger.debug(f"ReAct iteration {i + 1}/{MAX_ITERATIONS} complete")
+
+        logger.warning("ReAct loop hit max iterations")
+        return response.content or "Done."
 
     # ── Public interface ─────────────────────────────────────────────────────
 
@@ -305,7 +254,7 @@ class Brain:
         system_suffix: str = "",
     ) -> tuple[str, list[Message]]:
         """
-        Run the DSPy ReAct loop for a single user message.
+        Run the ReAct loop for a single user message.
 
         on_status receives human-readable progress strings ("Thinking...",
         "Using web search...") while the loop runs.  Safe to ignore.
@@ -321,37 +270,15 @@ class Brain:
         if system_suffix:
             system += "\n\n---\n" + system_suffix
 
-        history_str = _serialize_history(conversation_history)
         messages = list(conversation_history) + [
             Message(role="user", content=user_message)
         ]
 
         tools = self._build_tools(state)
-        react = AtlasReAct(AtlasSignature, tools=tools, max_iters=MAX_ITERATIONS)
 
-        logger.info(
-            f"DSPy ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})"
-        )
+        logger.info(f"ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})")
 
-        # Set up status drain if channel wants progress updates
-        drain_task = None
-        if on_status:
-            status_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
-            self._status_callback.activate(status_queue, asyncio.get_running_loop())
-            drain_task = asyncio.create_task(drain_status(status_queue, on_status))
-
-        try:
-            prediction = await asyncio.to_thread(
-                react,
-                system_prompt=system,
-                conversation_history=history_str,
-                user_message=query_text,
-            )
-        finally:
-            if drain_task is not None:
-                self._status_callback.deactivate()
-                status_queue.put_nowait(None)  # sentinel to stop drain
-                await drain_task
+        answer = await self._react_loop(system, messages, tools, state, on_status)
 
         # Sync per-turn state back to Brain
         self._pending_files = state.pending_files
@@ -365,19 +292,17 @@ class Brain:
 
         # reload was called — signal the main process to restart cleanly
         if state.restart_requested:
-            final_text = _clean_response(prediction.answer or "Restarting…")
+            final_text = _clean_response(answer or "Restarting…")
             messages.append(Message(role="assistant", content=final_text))
             logger.info("Reload confirmed — sending SIGTERM for clean restart")
 
             import signal
 
-            # Signal main.py to re-exec after clean shutdown.
-            # Using env var avoids circular import with main.
             os.environ["_ATLAS_RESTART"] = "1"
             os.kill(os.getpid(), signal.SIGTERM)
             return final_text, messages
 
-        final_text = _clean_response(prediction.answer or "✅ Done.")
+        final_text = _clean_response(answer or "✅ Done.")
         messages.append(Message(role="assistant", content=final_text))
         logger.info(f"Brain finished. Provider: {self.provider.model_name}")
         return final_text, messages
@@ -417,7 +342,7 @@ class Brain:
 
     @property
     def session_tokens(self) -> dict[str, int]:
-        """Cumulative token usage since last reset. Zero in DSPy mode."""
+        """Cumulative token usage for the current session."""
         return dict(self._session_tokens)
 
     def reset_session_tokens(self) -> None:

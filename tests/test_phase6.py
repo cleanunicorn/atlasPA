@@ -6,9 +6,6 @@ Tests for advanced reasoning features:
   - create_plan → plan stored on brain
   - reflect → gap detection
   - Brain.extract() → structured JSON output
-
-Note: parallel tool execution was a feature of the old hand-rolled ReAct loop.
-DSPy's ReAct runs tools sequentially; that behaviour is exercised in integration.
 """
 
 import pytest
@@ -44,18 +41,12 @@ def tmp_memory(tmp_path):
 
 @pytest.fixture
 def brain(tmp_memory, empty_skills):
-    """Brain with DSPy mocked out for tests that only call extract()."""
-    import types
+    """Brain for tests that only call extract()."""
     from brain.engine import Brain
 
-    mock_lm = types.SimpleNamespace(model="mock/model")
-    with (
-        patch("brain.engine._build_dspy_lm", return_value=mock_lm),
-        patch("brain.engine.dspy.configure"),
-    ):
-        provider = MagicMock()
-        provider.model_name = "mock"
-        yield Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    provider = MagicMock()
+    provider.model_name = "mock"
+    yield Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
 
 
 # ── ask_user / clarification ──────────────────────────────────────────────────
