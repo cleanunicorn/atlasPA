@@ -412,6 +412,119 @@ async def test_handle_voice_unauthorized():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Telegram bot photo handler
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def make_photo_update(caption=""):
+    """Build a minimal mock Update with a photo message."""
+    update = MagicMock()
+    update.effective_user.id = 1
+    update.effective_user.username = "testuser"
+
+    photo = MagicMock()
+    photo.file_unique_id = "photo123"
+    update.message.photo = [photo]  # handler uses photo[-1]
+    update.message.caption = caption
+    update.message.reply_text = AsyncMock()
+    update.message.chat.send_action = AsyncMock()
+    update.message.reply_to_message = None
+    return update
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_sends_multimodal_content_to_brain():
+    """Photo is downloaded, base64-encoded, and passed as an image block to brain."""
+    bot = make_tg_bot()
+    update = make_photo_update()
+
+    tg_file = AsyncMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake jpeg data"))
+    update.message.photo[-1].get_file = AsyncMock(return_value=tg_file)
+
+    bot._stream_think = AsyncMock(return_value=("Here's the image!", []))
+
+    await bot._handle_photo(update, MagicMock())
+
+    bot._stream_think.assert_called_once()
+    _, content, _ = bot._stream_think.call_args.args
+    image_blocks = [b for b in content if b.get("type") == "image"]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["media_type"] == "image/jpeg"
+    assert image_blocks[0]["data"]  # base64 data is non-empty
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_includes_caption():
+    """Caption text is included as a text block before the image."""
+    bot = make_tg_bot()
+    update = make_photo_update(caption="What is in this image?")
+
+    tg_file = AsyncMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake jpeg"))
+    update.message.photo[-1].get_file = AsyncMock(return_value=tg_file)
+
+    bot._stream_think = AsyncMock(return_value=("It shows a cat!", []))
+
+    await bot._handle_photo(update, MagicMock())
+
+    _, content, _ = bot._stream_think.call_args.args
+    text_blocks = [b for b in content if b.get("type") == "text"]
+    assert any("What is in this image?" in b["text"] for b in text_blocks)
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_no_caption_still_works():
+    """Photo without caption still calls brain with just the image block."""
+    bot = make_tg_bot()
+    update = make_photo_update(caption="")
+
+    tg_file = AsyncMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake jpeg"))
+    update.message.photo[-1].get_file = AsyncMock(return_value=tg_file)
+
+    bot._stream_think = AsyncMock(return_value=("I see an image.", []))
+
+    await bot._handle_photo(update, MagicMock())
+
+    bot._stream_think.assert_called_once()
+    _, content, _ = bot._stream_think.call_args.args
+    assert any(b.get("type") == "image" for b in content)
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_unauthorized():
+    """Unauthorized users are rejected and brain is never called."""
+    bot = make_tg_bot()
+    bot._allowed_users = {999}
+    update = make_photo_update()
+
+    await bot._handle_photo(update, MagicMock())
+
+    update.message.reply_text.assert_called_once_with("⛔ Unauthorized.")
+    bot.brain.think.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_download_error():
+    """Error during photo download sends error message to user without calling brain."""
+    bot = make_tg_bot()
+    update = make_photo_update()
+
+    tg_file = AsyncMock()
+    tg_file.download_as_bytearray = AsyncMock(side_effect=Exception("network error"))
+    update.message.photo[-1].get_file = AsyncMock(return_value=tg_file)
+
+    bot._stream_think = AsyncMock(return_value=("", []))
+
+    await bot._handle_photo(update, MagicMock())
+
+    bot._stream_think.assert_not_called()
+    update.message.reply_text.assert_called_once()
+    assert "⚠️" in update.message.reply_text.call_args.args[0]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Discord audio handling
 # ══════════════════════════════════════════════════════════════════════════════
 
