@@ -264,7 +264,7 @@ def test_skills_summary_groups_by_source(tmp_path):
 
 
 def test_brain_manage_skills_install():
-    from brain.engine import _make_manage_skills
+    from brain.tools import _make_manage_skills
     from unittest.mock import MagicMock
 
     mock_skills = MagicMock()
@@ -285,7 +285,7 @@ def test_brain_manage_skills_install():
 
 
 def test_brain_manage_skills_uninstall():
-    from brain.engine import _make_manage_skills
+    from brain.tools import _make_manage_skills
 
     mock_skills = MagicMock()
     mock_skills.uninstall.return_value = "✅ Addon skill 'echo' uninstalled."
@@ -298,7 +298,7 @@ def test_brain_manage_skills_uninstall():
 
 
 def test_brain_manage_skills_list():
-    from brain.engine import _make_manage_skills
+    from brain.tools import _make_manage_skills
 
     mock_skills = MagicMock()
     mock_skills.get_skills_summary.return_value = "Core skills:\n  - search"
@@ -311,7 +311,7 @@ def test_brain_manage_skills_list():
 
 
 def test_brain_manage_skills_missing_name():
-    from brain.engine import _make_manage_skills
+    from brain.tools import _make_manage_skills
 
     tool = _make_manage_skills(MagicMock())
     result = tool(action="install")
@@ -319,7 +319,7 @@ def test_brain_manage_skills_missing_name():
 
 
 def test_brain_manage_skills_unknown_action():
-    from brain.engine import _make_manage_skills
+    from brain.tools import _make_manage_skills
 
     tool = _make_manage_skills(MagicMock())
     result = tool(action="explode")

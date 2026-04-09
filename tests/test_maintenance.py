@@ -2,45 +2,55 @@
 tests/test_maintenance.py
 
 Tests for the daily maintenance module (heartbeat/maintenance.py).
-Mocks DSPy calls for context/awareness consolidation.
+Mocks provider.complete() for context/awareness consolidation.
 """
 
 import hashlib
 import json
-import types
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
+from providers.base import BaseLLMProvider, LLMResponse, Message
 
 
-# ── DSPy mock helpers ────────────────────────────────────────────────────────
+# ── Mock provider helper ───────────────────────────────────────────────────
 
 
-def _make_mock_cot(consolidated_json: str):
-    """Return a mock dspy.ChainOfThought that returns a fixed consolidation."""
+class _MockProvider(BaseLLMProvider):
+    """Provider that returns a fixed response."""
 
-    class MockCOT:
-        def __init__(self, sig):
-            pass
+    def __init__(self, content: str):
+        self._content = content
 
-        def __call__(self, **kwargs):
-            return types.SimpleNamespace(consolidated_json=consolidated_json)
+    @property
+    def model_name(self) -> str:
+        return "mock-maintenance"
 
-    return MockCOT
+    async def complete(self, messages, tools=None, system=None, max_tokens=4096, **kw):
+        return LLMResponse(content=self._content, tool_calls=[])
 
 
-def _make_mock_predict(keep_indices_json: str):
-    """Return a mock dspy.Predict that returns fixed keep indices."""
+class _FailingProvider(BaseLLMProvider):
+    """Provider that always raises."""
 
-    class MockPredict:
-        def __init__(self, sig):
-            pass
+    @property
+    def model_name(self) -> str:
+        return "mock-failing"
 
-        def __call__(self, **kwargs):
-            return types.SimpleNamespace(keep_indices_json=keep_indices_json)
+    async def complete(self, messages, tools=None, system=None, max_tokens=4096, **kw):
+        raise RuntimeError("LLM unavailable")
 
-    return MockPredict
+
+# ── Fixtures ────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def tmp_memory(tmp_path):
+    from memory.store import MemoryStore
+
+    with patch("memory.store.MEMORY_DIR", tmp_path):
+        yield MemoryStore()
 
 
 # ── Expired job cleanup ──────────────────────────────────────────────────────
@@ -114,15 +124,14 @@ def test_cleanup_empty_jobs_file(tmp_path):
     assert expired == []
 
 
-# ── Context consolidation (DSPy) ─────────────────────────────────────────────
+# ── Context consolidation (LLM) ───────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_consolidate_context_merges_duplicates(tmp_memory):
-    """DSPy consolidation merges redundant entries."""
+    """LLM consolidation merges redundant entries."""
     from heartbeat.maintenance import _consolidate_context
 
-    # Add redundant entries (mirrors real context.md pattern)
     tmp_memory.append_context("User works at Acme Corp as an engineer.")
     tmp_memory.append_context("User works at Acme Corp as an engineer. Likes Python.")
     tmp_memory.append_context("User likes hiking on weekends.")
@@ -132,7 +141,6 @@ async def test_consolidate_context_merges_duplicates(tmp_memory):
     entries_before = tmp_memory.parse_context_entries()
     assert len(entries_before) == 5
 
-    # Mock DSPy to return merged output
     consolidated = json.dumps(
         [
             {
@@ -151,11 +159,8 @@ async def test_consolidate_context_merges_duplicates(tmp_memory):
         ]
     )
 
-    with patch(
-        "heartbeat.maintenance.dspy.ChainOfThought",
-        _make_mock_cot(consolidated),
-    ):
-        before, after = await _consolidate_context(tmp_memory)
+    provider = _MockProvider(consolidated)
+    before, after = await _consolidate_context(tmp_memory, provider)
 
     assert before == 5
     assert after == 4  # merged the two Acme entries
@@ -172,7 +177,6 @@ async def test_consolidate_context_preserves_background(tmp_memory):
     """Background block is preserved through consolidation."""
     from heartbeat.maintenance import _consolidate_context
 
-    # Write a context with a background block
     tmp_memory.replace_context_entries(
         "User is a senior engineer with 10 years experience.",
         [
@@ -200,17 +204,13 @@ async def test_consolidate_context_preserves_background(tmp_memory):
         ]
     )
 
-    with patch(
-        "heartbeat.maintenance.dspy.ChainOfThought",
-        _make_mock_cot(consolidated),
-    ):
-        before, after = await _consolidate_context(tmp_memory)
+    provider = _MockProvider(consolidated)
+    before, after = await _consolidate_context(tmp_memory, provider)
 
     assert before == 5
     assert after == 1
 
     entries_after = tmp_memory.parse_context_entries()
-    # Background block + 1 consolidated entry
     background = [e for e in entries_after if not e.timestamp]
     assert len(background) == 1
     assert "senior engineer" in background[0].content
@@ -222,7 +222,8 @@ async def test_consolidate_context_skips_below_threshold(tmp_memory):
     from heartbeat.maintenance import _consolidate_context
 
     tmp_memory.append_context("Single entry.")
-    before, after = await _consolidate_context(tmp_memory)
+    provider = _MockProvider("[]")
+    before, after = await _consolidate_context(tmp_memory, provider)
 
     assert before == 0
     assert after == 0
@@ -238,11 +239,8 @@ async def test_consolidate_context_handles_fenced_json(tmp_memory):
 
     fenced = '```json\n[{"timestamp": "2026-03-28 12:00", "content": "All facts merged."}]\n```'
 
-    with patch(
-        "heartbeat.maintenance.dspy.ChainOfThought",
-        _make_mock_cot(fenced),
-    ):
-        before, after = await _consolidate_context(tmp_memory)
+    provider = _MockProvider(fenced)
+    before, after = await _consolidate_context(tmp_memory, provider)
 
     assert before == 6
     assert after == 1
@@ -258,20 +256,17 @@ async def test_consolidate_context_aborts_on_empty_result(tmp_memory):
 
     entries_before = tmp_memory.parse_context_entries()
 
-    with (
-        patch("heartbeat.maintenance.dspy.ChainOfThought", _make_mock_cot("[]")),
-        pytest.raises(ValueError, match="invalid consolidation"),
-    ):
-        await _consolidate_context(tmp_memory)
+    provider = _MockProvider("[]")
+    with pytest.raises(ValueError, match="invalid consolidation"):
+        await _consolidate_context(tmp_memory, provider)
 
-    # Memory should be unchanged
     entries_after = tmp_memory.parse_context_entries()
     assert len(entries_after) == len(entries_before)
 
 
 @pytest.mark.asyncio
-async def test_consolidate_context_none_from_dspy(tmp_memory):
-    """Consolidation raises ValueError (not AttributeError) when DSPy returns None."""
+async def test_consolidate_context_none_from_llm(tmp_memory):
+    """Consolidation raises ValueError when LLM returns None/empty."""
     from heartbeat.maintenance import _consolidate_context
 
     for i in range(6):
@@ -279,24 +274,17 @@ async def test_consolidate_context_none_from_dspy(tmp_memory):
 
     entries_before = tmp_memory.parse_context_entries()
 
-    # Simulate DSPy returning None for the output field (LLM server down, etc.)
-    with (
-        patch(
-            "heartbeat.maintenance.dspy.ChainOfThought",
-            _make_mock_cot(None),
-        ),
-        pytest.raises(ValueError, match="empty/None"),
-    ):
-        await _consolidate_context(tmp_memory)
+    provider = _MockProvider("")
+    with pytest.raises(ValueError, match="empty/None"):
+        await _consolidate_context(tmp_memory, provider)
 
-    # Memory must be unchanged
     entries_after = tmp_memory.parse_context_entries()
     assert len(entries_after) == len(entries_before)
 
 
 @pytest.mark.asyncio
-async def test_consolidate_awareness_none_from_dspy(tmp_path):
-    """Awareness consolidation raises ValueError (not AttributeError) when DSPy returns None."""
+async def test_consolidate_awareness_none_from_llm(tmp_path):
+    """Awareness consolidation raises ValueError when LLM returns None/empty."""
     from heartbeat.maintenance import _consolidate_awareness
 
     log_file = tmp_path / "awareness_log.json"
@@ -306,24 +294,23 @@ async def test_consolidate_awareness_none_from_dspy(tmp_path):
         entries.append({"ts": ts, "triggered": False, "summary": "no action"})
     log_file.write_text(json.dumps(entries))
 
+    provider = _MockProvider("")
     with (
         patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
-        patch("heartbeat.maintenance.dspy.Predict", _make_mock_predict(None)),
         pytest.raises(ValueError, match="empty/None"),
     ):
-        await _consolidate_awareness()
+        await _consolidate_awareness(provider)
 
-    # Log must be unchanged
     remaining = json.loads(log_file.read_text())
     assert len(remaining) == 12
 
 
-# ── Awareness consolidation (DSPy) ──────────────────────────────────────────
+# ── Awareness consolidation (LLM) ──────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_consolidate_awareness_keeps_triggered(tmp_path):
-    """DSPy keeps triggered entries and prunes stale no-action ones."""
+    """LLM keeps triggered entries and prunes stale no-action ones."""
     from heartbeat.maintenance import _consolidate_awareness
 
     log_file = tmp_path / "awareness_log.json"
@@ -333,21 +320,15 @@ async def test_consolidate_awareness_keeps_triggered(tmp_path):
         entries.append(
             {
                 "ts": ts,
-                "triggered": (i == 5),  # only entry 5 triggered
+                "triggered": (i == 5),
                 "summary": "sent reminder" if i == 5 else "no action",
             }
         )
     log_file.write_text(json.dumps(entries))
 
-    # LLM decides to keep entry 5 (triggered) and entries 10, 11 (recent)
-    with (
-        patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
-        patch(
-            "heartbeat.maintenance.dspy.Predict",
-            _make_mock_predict("[5, 10, 11]"),
-        ),
-    ):
-        before, after = await _consolidate_awareness()
+    provider = _MockProvider("[5, 10, 11]")
+    with patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file):
+        before, after = await _consolidate_awareness(provider)
 
     assert before == 12
     assert after == 3
@@ -375,8 +356,9 @@ async def test_consolidate_awareness_skips_below_threshold(tmp_path):
         )
     )
 
+    provider = _MockProvider("[]")
     with patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file):
-        before, after = await _consolidate_awareness()
+        before, after = await _consolidate_awareness(provider)
 
     assert before == 0
     assert after == 0
@@ -387,8 +369,9 @@ async def test_consolidate_awareness_missing_file(tmp_path):
     """Handles missing log file gracefully."""
     from heartbeat.maintenance import _consolidate_awareness
 
+    provider = _MockProvider("[]")
     with patch("heartbeat.maintenance.AWARENESS_LOG_FILE", tmp_path / "nope.json"):
-        before, after = await _consolidate_awareness()
+        before, after = await _consolidate_awareness(provider)
 
     assert before == 0
     assert after == 0
@@ -406,11 +389,9 @@ async def test_consolidate_awareness_safety_keeps_last(tmp_path):
         entries.append({"ts": ts, "triggered": False, "summary": "no action"})
     log_file.write_text(json.dumps(entries))
 
-    with (
-        patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
-        patch("heartbeat.maintenance.dspy.Predict", _make_mock_predict("[]")),
-    ):
-        before, after = await _consolidate_awareness()
+    provider = _MockProvider("[]")
+    with patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file):
+        before, after = await _consolidate_awareness(provider)
 
     assert before == 12
     assert after == 1  # safety net: kept the last entry
@@ -428,15 +409,9 @@ async def test_consolidate_awareness_invalid_indices_ignored(tmp_path):
         entries.append({"ts": ts, "triggered": False, "summary": "no action"})
     log_file.write_text(json.dumps(entries))
 
-    # Indices 99 and -1 are invalid; only 0 and 11 are valid
-    with (
-        patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
-        patch(
-            "heartbeat.maintenance.dspy.Predict",
-            _make_mock_predict("[0, 11, 99, -1]"),
-        ),
-    ):
-        before, after = await _consolidate_awareness()
+    provider = _MockProvider("[0, 11, 99, -1]")
+    with patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file):
+        before, after = await _consolidate_awareness(provider)
 
     assert before == 12
     assert after == 2  # only 0 and 11 are in range(12)
@@ -531,7 +506,7 @@ async def test_run_maintenance_full(tmp_path, tmp_memory):
 
     reload_called = []
 
-    # Mock DSPy: context consolidated to 3, awareness keeps indices [10, 11]
+    # Mock provider: returns different content based on call order
     context_result = json.dumps(
         [
             {"timestamp": "2026-03-28 12:00", "content": "Merged context A."},
@@ -540,21 +515,29 @@ async def test_run_maintenance_full(tmp_path, tmp_memory):
         ]
     )
 
+    call_count = 0
+
+    class _OrderedProvider(BaseLLMProvider):
+        @property
+        def model_name(self):
+            return "mock"
+
+        async def complete(self, messages, tools=None, system=None, max_tokens=4096, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return LLMResponse(content=context_result, tool_calls=[])
+            else:
+                return LLMResponse(content="[10, 11]", tool_calls=[])
+
     with (
         patch("heartbeat.jobs.JOBS_FILE", jobs_file),
         patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
         patch("heartbeat.maintenance.EMBEDDINGS_FILE", cache_file),
-        patch(
-            "heartbeat.maintenance.dspy.ChainOfThought",
-            _make_mock_cot(context_result),
-        ),
-        patch(
-            "heartbeat.maintenance.dspy.Predict",
-            _make_mock_predict("[10, 11]"),
-        ),
     ):
         summary = await run_maintenance(
             memory=tmp_memory,
+            provider=_OrderedProvider(),
             on_jobs_changed=lambda: reload_called.append(True),
         )
 
@@ -611,11 +594,10 @@ async def test_run_maintenance_notifies_user(tmp_path, tmp_memory):
 
 
 @pytest.mark.asyncio
-async def test_run_maintenance_dspy_failure_doesnt_crash(tmp_path, tmp_memory):
-    """If DSPy consolidation fails, maintenance continues with other tasks."""
+async def test_run_maintenance_llm_failure_doesnt_crash(tmp_path, tmp_memory):
+    """If LLM consolidation fails, maintenance continues with other tasks."""
     from heartbeat.maintenance import run_maintenance
 
-    # Add entries to trigger consolidation attempts
     for i in range(6):
         tmp_memory.append_context(f"Entry {i}.")
 
@@ -626,31 +608,15 @@ async def test_run_maintenance_dspy_failure_doesnt_crash(tmp_path, tmp_memory):
         entries.append({"ts": ts, "triggered": False, "summary": "no action"})
     log_file.write_text(json.dumps(entries))
 
-    # Make DSPy calls raise
-    def _failing_cot(sig):
-        def _call(**kwargs):
-            raise RuntimeError("LLM unavailable")
-
-        cot = types.SimpleNamespace()
-        cot.__call__ = _call
-        return cot
-
-    def _failing_predict(sig):
-        def _call(**kwargs):
-            raise RuntimeError("LLM unavailable")
-
-        pred = types.SimpleNamespace()
-        pred.__call__ = _call
-        return pred
-
     with (
         patch("heartbeat.jobs.JOBS_FILE", tmp_path / "jobs.json"),
         patch("heartbeat.maintenance.AWARENESS_LOG_FILE", log_file),
         patch("heartbeat.maintenance.EMBEDDINGS_FILE", tmp_path / "no.json"),
-        patch("heartbeat.maintenance.dspy.ChainOfThought", _failing_cot),
-        patch("heartbeat.maintenance.dspy.Predict", _failing_predict),
     ):
-        summary = await run_maintenance(memory=tmp_memory)
+        summary = await run_maintenance(
+            memory=tmp_memory,
+            provider=_FailingProvider(),
+        )
 
     # Should report failures but not crash
     assert "failed" in summary.lower()

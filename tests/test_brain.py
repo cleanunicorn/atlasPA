@@ -2,7 +2,7 @@
 tests/test_brain.py
 
 Tests for memory, history, and summariser — components that don't touch the
-DSPy ReAct loop directly.  Brain-specific ReAct tests live in test_dspy_engine.py.
+ReAct loop directly.  Brain-specific ReAct tests live in test_dspy_engine.py.
 
 Also exports shared test helpers (MockProvider, make_brain, fixtures) used by
 test_channels.py and test_heartbeat.py.
@@ -72,7 +72,7 @@ def empty_skills(tmp_path: Path) -> SkillRegistry:
         yield SkillRegistry()
 
 
-# ── make_brain — DSPy-aware test helper ──────────────────────────────────────
+# ── make_brain — test helper ────────────────────────────────────────────────
 
 
 def make_brain(
@@ -83,27 +83,20 @@ def make_brain(
     """
     Create a Brain for testing without real API calls.
 
-    Patches out DSPy initialisation and replaces brain.think() with a
-    simulated loop that:
-      - Iterates through `responses` in order (same as the old MockProvider)
+    Replaces brain.think() with a simulated loop that:
+      - Iterates through `responses` in order
       - For tool-call responses: executes the tool closure, appends tool messages
       - For the first text response: returns it as the final answer
 
-    This preserves the old test API while working with the new DSPy engine.
+    This preserves the old test API while working with the new engine.
     """
     import types
 
-    mock_lm = types.SimpleNamespace(model="mock/model")
-
-    with (
-        patch("brain.engine._build_dspy_lm", return_value=mock_lm),
-        patch("brain.engine.dspy.configure"),
-    ):
-        provider = MockProvider(responses)
-        brain = Brain(provider=provider, memory=memory, skills=skills)
+    provider = MockProvider(responses)
+    brain = Brain(provider=provider, memory=memory, skills=skills)
 
     # Replace think() with a simulation that drives the tool closures directly,
-    # reproducing the old ReAct-loop behaviour without a real LLM.
+    # reproducing the ReAct-loop behaviour without a real LLM.
     _responses = list(responses)
 
     async def simulated_think(
@@ -145,7 +138,7 @@ def make_brain(
                         except Exception as e:
                             result = f"Error in {tc.name}: {e}"
                     elif tc.name.startswith("skill_"):
-                        skill = skills.get_skill(tc.name[len("skill_") :])
+                        skill = skills.get_skill(tc.name[len("skill_"):])
                         result = (
                             await skill.run(**tc.arguments)
                             if skill

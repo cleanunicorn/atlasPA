@@ -4,7 +4,7 @@ heartbeat/maintenance.py
 Daily maintenance task — cleans up expired jobs, consolidates memory,
 and prunes stale data.
 
-Context and awareness consolidation use DSPy signatures so the LLM
+Context and awareness consolidation use direct LLM calls so the model
 decides what to deduplicate, merge, and prune — rather than relying
 on simple thresholds or time cutoffs.
 
@@ -16,18 +16,16 @@ Usage:
         await run_maintenance(memory, provider, on_jobs_changed=...)
 """
 
-import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
 
-import dspy
-
 from heartbeat.jobs import load_jobs, save_jobs
 from memory.retriever import ContextEntry
 from memory.store import MemoryStore
+from providers.base import BaseLLMProvider, Message
 from paths import MEMORY_DIR
 
 logger = logging.getLogger(__name__)
@@ -41,49 +39,7 @@ AWARENESS_CONSOLIDATION_THRESHOLD = int(
 AWARENESS_LOG_FILE = MEMORY_DIR / "awareness_log.json"
 EMBEDDINGS_FILE = MEMORY_DIR / "embeddings.json"
 
-
-# ── DSPy Signatures ──────────────────────────────────────────────────────────
-
-
-class ConsolidateContext(dspy.Signature):
-    """You are a memory maintenance system for a personal AI agent.
-
-    Given timestamped context entries about a user, consolidate them:
-    1. Merge entries that cover the same topic into one comprehensive entry.
-    2. Remove facts that are repeated across multiple entries.
-    3. Preserve ALL unique facts — never discard information.
-    4. When merging, use the most recent timestamp of the merged entries.
-    5. Each output entry should cover a distinct topic or theme.
-
-    Output a JSON array of objects with "timestamp" and "content" keys.
-    Do not wrap the JSON in markdown code fences."""
-
-    context_entries: str = dspy.InputField(
-        desc="Numbered timestamped context entries about the user, one per block"
-    )
-    consolidated_json: str = dspy.OutputField(
-        desc='JSON array: [{"timestamp": "YYYY-MM-DD HH:MM", "content": "..."}]'
-    )
-
-
-class ConsolidateAwareness(dspy.Signature):
-    """You are an awareness log analyzer for a personal AI agent.
-
-    Given awareness check log entries, decide which to retain:
-    1. Always keep entries where "triggered" is true (actual actions taken).
-    2. Keep recent "no action" entries (last 24 hours) for recency context.
-    3. Prune older "no action" entries — they add no value.
-    4. Keep entries that reveal useful patterns about user activity.
-
-    Output a JSON array of 0-based integer indices of entries to KEEP.
-    Do not wrap the JSON in markdown code fences."""
-
-    log_entries: str = dspy.InputField(
-        desc="Awareness log entries as JSON array with ts, triggered, summary fields"
-    )
-    keep_indices_json: str = dspy.OutputField(
-        desc="JSON array of 0-based integer indices to retain, e.g. [0, 3, 5]"
-    )
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -91,6 +47,7 @@ class ConsolidateAwareness(dspy.Signature):
 
 async def run_maintenance(
     memory: MemoryStore,
+    provider: BaseLLMProvider | None = None,
     on_jobs_changed: "callable | None" = None,
     notify_callback: "callable | None" = None,
 ) -> str:
@@ -99,6 +56,7 @@ async def run_maintenance(
 
     Args:
         memory:           The MemoryStore instance.
+        provider:         LLM provider for consolidation tasks.
         on_jobs_changed:  Called after expired jobs are removed so the scheduler
                           can reload.  Signature: on_jobs_changed() -> None
         notify_callback:  Optional async fn(text, files) to inform the user.
@@ -115,23 +73,24 @@ async def run_maintenance(
         if on_jobs_changed:
             on_jobs_changed()
 
-    # 2. Consolidate context entries via DSPy
-    try:
-        before, after = await _consolidate_context(memory)
-        if before > 0:
-            results.append(f"Consolidated context: {before} → {after} entries")
-    except Exception as e:
-        logger.error(f"Context consolidation failed: {e}")
-        results.append(f"Context consolidation failed: {e}")
+    # 2. Consolidate context entries via LLM
+    if provider:
+        try:
+            before, after = await _consolidate_context(memory, provider)
+            if before > 0:
+                results.append(f"Consolidated context: {before} → {after} entries")
+        except Exception as e:
+            logger.error(f"Context consolidation failed: {e}")
+            results.append(f"Context consolidation failed: {e}")
 
-    # 3. Consolidate awareness log via DSPy
-    try:
-        before, after = await _consolidate_awareness()
-        if before > 0:
-            results.append(f"Consolidated awareness log: {before} → {after} entries")
-    except Exception as e:
-        logger.error(f"Awareness consolidation failed: {e}")
-        results.append(f"Awareness consolidation failed: {e}")
+        # 3. Consolidate awareness log via LLM
+        try:
+            before, after = await _consolidate_awareness(provider)
+            if before > 0:
+                results.append(f"Consolidated awareness log: {before} → {after} entries")
+        except Exception as e:
+            logger.error(f"Awareness consolidation failed: {e}")
+            results.append(f"Awareness consolidation failed: {e}")
 
     # 4. Prune stale embedding cache entries (deterministic)
     pruned_embeddings = _prune_embedding_cache(memory)
@@ -150,7 +109,20 @@ async def run_maintenance(
     return summary
 
 
-# ── Context consolidation (DSPy) ─────────────────────────────────────────────
+# ── Context consolidation (LLM) ────────────────────────────────────────────
+
+_CONTEXT_SYSTEM = """\
+You are a memory maintenance system for a personal AI agent.
+
+Given timestamped context entries about a user, consolidate them:
+1. Merge entries that cover the same topic into one comprehensive entry.
+2. Remove facts that are repeated across multiple entries.
+3. Preserve ALL unique facts — never discard information.
+4. When merging, use the most recent timestamp of the merged entries.
+5. Each output entry should cover a distinct topic or theme.
+
+Output a JSON array of objects with "timestamp" and "content" keys.
+Do not wrap the JSON in markdown code fences."""
 
 
 def _strip_fences(text: str | None) -> str:
@@ -164,9 +136,11 @@ def _strip_fences(text: str | None) -> str:
     return text.strip()
 
 
-async def _consolidate_context(memory: MemoryStore) -> tuple[int, int]:
+async def _consolidate_context(
+    memory: MemoryStore, provider: BaseLLMProvider
+) -> tuple[int, int]:
     """
-    Use DSPy to intelligently consolidate context entries.
+    Use LLM to intelligently consolidate context entries.
 
     Returns (before_count, after_count).  (0, 0) if skipped.
     """
@@ -183,14 +157,18 @@ async def _consolidate_context(memory: MemoryStore) -> tuple[int, int]:
         entry_lines.append(f"Entry {i} [{e.timestamp}]:\n{e.content}")
     entries_text = "\n\n".join(entry_lines)
 
-    predict = dspy.ChainOfThought(ConsolidateContext)
-    result = await asyncio.to_thread(predict, context_entries=entries_text)
+    response = await provider.complete(
+        messages=[Message(role="user", content=entries_text)],
+        system=_CONTEXT_SYSTEM,
+        max_tokens=MAX_TOKENS,
+        json_mode=True,
+    )
 
-    raw = _strip_fences(result.consolidated_json)
+    raw = _strip_fences(response.content)
     if not raw:
         raise ValueError(
-            "LLM returned empty/None for consolidated_json — "
-            "model may not support structured output via DSPy"
+            "LLM returned empty/None for consolidation — "
+            "model may not support structured output"
         )
 
     consolidated = json.loads(raw)
@@ -217,12 +195,26 @@ async def _consolidate_context(memory: MemoryStore) -> tuple[int, int]:
     return before_count, len(new_entries)
 
 
-# ── Awareness consolidation (DSPy) ──────────────────────────────────────────
+# ── Awareness consolidation (LLM) ──────────────────────────────────────────
+
+_AWARENESS_SYSTEM = """\
+You are an awareness log analyzer for a personal AI agent.
+
+Given awareness check log entries, decide which to retain:
+1. Always keep entries where "triggered" is true (actual actions taken).
+2. Keep recent "no action" entries (last 24 hours) for recency context.
+3. Prune older "no action" entries — they add no value.
+4. Keep entries that reveal useful patterns about user activity.
+
+Output a JSON array of 0-based integer indices of entries to KEEP.
+Do not wrap the JSON in markdown code fences."""
 
 
-async def _consolidate_awareness() -> tuple[int, int]:
+async def _consolidate_awareness(
+    provider: BaseLLMProvider,
+) -> tuple[int, int]:
     """
-    Use DSPy to analyze awareness log and prune low-value entries.
+    Use LLM to analyze awareness log and prune low-value entries.
 
     Returns (before_count, after_count).  (0, 0) if skipped.
     """
@@ -237,14 +229,18 @@ async def _consolidate_awareness() -> tuple[int, int]:
     if len(entries) < AWARENESS_CONSOLIDATION_THRESHOLD:
         return 0, 0
 
-    predict = dspy.Predict(ConsolidateAwareness)
-    result = await asyncio.to_thread(predict, log_entries=json.dumps(entries, indent=2))
+    response = await provider.complete(
+        messages=[Message(role="user", content=json.dumps(entries, indent=2))],
+        system=_AWARENESS_SYSTEM,
+        max_tokens=MAX_TOKENS,
+        json_mode=True,
+    )
 
-    raw = _strip_fences(result.keep_indices_json)
+    raw = _strip_fences(response.content)
     if not raw:
         raise ValueError(
-            "LLM returned empty/None for keep_indices_json — "
-            "model may not support structured output via DSPy"
+            "LLM returned empty/None for awareness pruning — "
+            "model may not support structured output"
         )
 
     keep_indices = set(json.loads(raw))

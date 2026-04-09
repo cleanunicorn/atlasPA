@@ -87,6 +87,7 @@ class Heartbeat:
         """Internal: execute daily maintenance tasks."""
         return await run_maintenance(
             memory=self._brain.memory,
+            provider=self._brain.provider,
             on_jobs_changed=self._scheduler.reload_jobs,
             notify_callback=self._notify_callback,
         )

@@ -1,10 +1,10 @@
 """
 brain/tools.py
 
-Built-in tool factories and skill-to-dspy.Tool wrappers.
+Built-in tool factories and skill wrappers.
 
-Each factory returns a dspy.Tool that closes over per-turn state, memory,
-skill registry, or brain reference as needed.
+Each factory returns a BrainTool that pairs a callable with the metadata
+needed to build a ToolDefinition for the provider's complete() call.
 """
 
 import asyncio
@@ -12,9 +12,9 @@ import inspect
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
-import dspy
-
+from providers.base import ToolDefinition
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry, Skill
 
@@ -29,6 +29,34 @@ _DEFAULT_SCHEMA = {
     },
     "required": ["input"],
 }
+
+
+# ── BrainTool ───────────────────────────────────────────────────────────────
+
+
+@dataclass
+class BrainTool:
+    """A tool the Brain can execute: metadata + callable."""
+
+    name: str
+    description: str
+    parameters: dict  # Full JSON Schema {"type": "object", "properties": ...}
+    func: Callable
+
+    def __call__(self, **kwargs):
+        return self.func(**kwargs)
+
+    @property
+    def args(self):
+        """Properties dict — backward compat for tests that check .args."""
+        return self.parameters.get("properties", {})
+
+    def to_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+        )
 
 
 # ── Per-turn shared state ────────────────────────────────────────────────────
@@ -59,11 +87,52 @@ def _run_skill_sync(skill: Skill, kwargs: dict) -> str:
     return str(result)
 
 
-# ── Skill → dspy.Tool ───────────────────────────────────────────────────────
+# ── Schema builder ──────────────────────────────────────────────────────────
 
 
-def _make_skill_tool(skill: Skill) -> dspy.Tool:
-    """Wrap a Skill as a dspy.Tool using its JSON Schema PARAMETERS."""
+_TYPE_MAP = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+}
+
+
+def _func_schema(func: Callable) -> dict:
+    """Build a JSON Schema from a function's type-annotated signature."""
+    sig = inspect.signature(func)
+    properties = {}
+    required = []
+
+    for name, param in sig.parameters.items():
+        ann = param.annotation
+        json_type = _TYPE_MAP.get(ann, "string")
+        properties[name] = {"type": json_type}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    schema: dict = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _tool(func: Callable, name: str | None = None) -> BrainTool:
+    """Create a BrainTool from a function (uses name, docstring, signature)."""
+    return BrainTool(
+        name=name or func.__name__,
+        description=func.__doc__ or "",
+        parameters=_func_schema(func),
+        func=func,
+    )
+
+
+# ── Skill → BrainTool ──────────────────────────────────────────────────────
+
+
+def _make_skill_tool(skill: Skill) -> BrainTool:
+    """Wrap a Skill as a BrainTool using its JSON Schema PARAMETERS."""
     schema = (
         getattr(skill._module, "PARAMETERS", _DEFAULT_SCHEMA)
         if skill._module
@@ -78,38 +147,42 @@ def _make_skill_tool(skill: Skill) -> dspy.Tool:
 
     wrapper.__name__ = f"skill_{skill.name}"
 
-    return dspy.Tool(
-        func=wrapper,
+    return BrainTool(
         name=f"skill_{skill.name}",
-        desc=skill.description,
-        args=props,
+        description=skill.description,
+        parameters={
+            "type": "object",
+            "properties": props,
+            "required": schema.get("required", []),
+        },
+        func=wrapper,
     )
 
 
 # ── Built-in tool factories ─────────────────────────────────────────────────
 
 
-def _make_remember(memory: MemoryStore) -> dspy.Tool:
+def _make_remember(memory: MemoryStore) -> BrainTool:
     def remember(note: str) -> str:
         """Save an important fact or note about the user to long-term memory. Use this when you learn something about the user worth remembering across sessions."""
         memory.append_context(note)
         logger.info(f"Remembered: {note[:80]}")
         return f"✅ Remembered: {note}"
 
-    return dspy.Tool(remember)
+    return _tool(remember)
 
 
-def _make_forget(memory: MemoryStore) -> dspy.Tool:
+def _make_forget(memory: MemoryStore) -> BrainTool:
     def forget(note: str) -> str:
         """Remove an outdated or incorrect fact from long-term memory. Use when a previously remembered fact is no longer true or was wrong."""
         result = memory.forget_entry(note)
         logger.info(f"Forget: '{note[:80]}' → {result[:60]}")
         return result
 
-    return dspy.Tool(forget)
+    return _tool(forget)
 
 
-def _make_set_location(memory: MemoryStore) -> dspy.Tool:
+def _make_set_location(memory: MemoryStore) -> BrainTool:
     def set_location(location: str, timezone: str) -> str:
         """Update the user's current location and timezone. Pass empty strings to reset to home."""
         memory.set_current_location(location, timezone)
@@ -119,10 +192,10 @@ def _make_set_location(memory: MemoryStore) -> dspy.Tool:
         logger.info("Location reset to home")
         return "✅ Location reset to home timezone."
 
-    return dspy.Tool(set_location)
+    return _tool(set_location)
 
 
-def _make_send_file(state: _TurnState) -> dspy.Tool:
+def _make_send_file(state: _TurnState) -> BrainTool:
     def send_file(path: str, caption: str = "") -> str:
         """Send a file (image, document, screenshot) to the user. Use after creating or saving a file the user should receive."""
         p = Path(path).expanduser()
@@ -132,10 +205,10 @@ def _make_send_file(state: _TurnState) -> dspy.Tool:
         logger.info(f"File queued: {p.name}")
         return f"✅ File queued: {p.name} — it will be sent to the user."
 
-    return dspy.Tool(send_file)
+    return _tool(send_file)
 
 
-def _make_schedule_job(brain_ref) -> dspy.Tool:
+def _make_schedule_job(brain_ref) -> BrainTool:
     def schedule_job(job_id: str, schedule: str, prompt: str) -> str:
         """Schedule a recurring or one-time background task using a cron expression or ISO datetime."""
         from heartbeat.jobs import Job, upsert_job
@@ -149,10 +222,10 @@ def _make_schedule_job(brain_ref) -> dspy.Tool:
         logger.info(f"Scheduled job '{job.id}': {job.schedule}")
         return f"✅ Job '{job.id}' scheduled: {job.schedule}"
 
-    return dspy.Tool(schedule_job)
+    return _tool(schedule_job)
 
 
-def _make_list_jobs() -> dspy.Tool:
+def _make_list_jobs() -> BrainTool:
     def list_jobs() -> str:
         """List all scheduled background jobs and their status."""
         from heartbeat.jobs import load_jobs
@@ -169,10 +242,10 @@ def _make_list_jobs() -> dspy.Tool:
             )
         return "\n".join(lines)
 
-    return dspy.Tool(list_jobs)
+    return _tool(list_jobs)
 
 
-def _make_delete_job(brain_ref) -> dspy.Tool:
+def _make_delete_job(brain_ref) -> BrainTool:
     def delete_job(job_id: str) -> str:
         """Delete a scheduled background job. Use list_jobs first to find the exact job_id."""
         from heartbeat.jobs import remove_job
@@ -185,20 +258,20 @@ def _make_delete_job(brain_ref) -> dspy.Tool:
         logger.info(f"Deleted job '{job_id}'")
         return f"✅ Job '{job_id}' deleted."
 
-    return dspy.Tool(delete_job)
+    return _tool(delete_job)
 
 
-def _make_ask_user(state: _TurnState) -> dspy.Tool:
+def _make_ask_user(state: _TurnState) -> BrainTool:
     def ask_user(question: str) -> str:
         """Ask the user a single focused clarifying question when their intent is ambiguous or you need a specific piece of information. Do not ask multiple questions."""
         state.clarification = question
         logger.info(f"Clarification requested: {question[:120]}")
         return "__ASK_USER__"
 
-    return dspy.Tool(ask_user)
+    return _tool(ask_user)
 
 
-def _make_create_plan(state: _TurnState) -> dspy.Tool:
+def _make_create_plan(state: _TurnState) -> BrainTool:
     def create_plan(title: str, steps: list) -> str:
         """Before tackling a complex multi-step task, lay out a structured plan. Call once at the start, then execute the steps using other tools."""
         if not isinstance(steps, list):
@@ -208,10 +281,10 @@ def _make_create_plan(state: _TurnState) -> dspy.Tool:
         logger.info(f"Plan created ({len(steps)} steps): {title}")
         return f"Plan recorded:\n{state.current_plan}"
 
-    return dspy.Tool(create_plan)
+    return _tool(create_plan)
 
 
-def _make_reflect() -> dspy.Tool:
+def _make_reflect() -> BrainTool:
     def reflect(goal: str, accomplished: str, gaps: str = "none") -> str:
         """Verify you have fully addressed the user's request before giving a final answer. Identify any gaps and address them."""
         logger.info(f"Reflection — goal: {goal[:80]} | gaps: {gaps[:80]}")
@@ -221,20 +294,20 @@ def _make_reflect() -> dspy.Tool:
             )
         return f"Reflection: gaps identified — {gaps}. Address these before concluding."
 
-    return dspy.Tool(reflect)
+    return _tool(reflect)
 
 
-def _make_reload(state: _TurnState) -> dspy.Tool:
+def _make_reload(state: _TurnState) -> BrainTool:
     def reload() -> str:
         """Restart the Atlas process to pick up code changes, newly installed dependencies, or updated configuration."""
         state.restart_requested = True
         logger.info("Reload requested")
         return "__RELOAD__"
 
-    return dspy.Tool(reload)
+    return _tool(reload)
 
 
-def _make_run_claude() -> dspy.Tool:
+def _make_run_claude() -> BrainTool:
     def run_claude(prompt: str, workdir: str = "", timeout: int = 120) -> str:
         """Run the Claude Code CLI with a prompt. Use this for code generation, API exploration, and building skills. Claude Code is a powerful coding assistant that can read files, search codebases, and write high-quality code."""
         import subprocess
@@ -276,10 +349,10 @@ def _make_run_claude() -> dspy.Tool:
         except Exception as e:
             return f"Error running claude CLI: {e}"
 
-    return dspy.Tool(run_claude)
+    return _tool(run_claude)
 
 
-def _make_manage_skills(skills: SkillRegistry) -> dspy.Tool:
+def _make_manage_skills(skills: SkillRegistry) -> BrainTool:
     def manage_skills(
         action: str, name: str = "", skill_md: str = "", tool_py: str = ""
     ) -> str:
@@ -304,4 +377,4 @@ def _make_manage_skills(skills: SkillRegistry) -> dspy.Tool:
             f"Unknown manage_skills action '{action}'. Use: install, uninstall, list."
         )
 
-    return dspy.Tool(manage_skills)
+    return _tool(manage_skills)
