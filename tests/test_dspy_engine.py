@@ -9,7 +9,6 @@ Structure:
   - Integration tests for Brain.think() with provider mocked
 """
 
-import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -278,9 +277,11 @@ def test_reload_sets_flag():
 @pytest.mark.asyncio
 async def test_basic_response(tmp_memory, empty_skills):
     """Brain.think() returns the answer from the LLM."""
-    provider = MockProvider([
-        LLMResponse(content="Hello there!", tool_calls=[]),
-    ])
+    provider = MockProvider(
+        [
+            LLMResponse(content="Hello there!", tool_calls=[]),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, history = await brain.think("Hi", [])
 
@@ -297,9 +298,11 @@ async def test_history_passed_through(tmp_memory, empty_skills):
         Message(role="user", content="Earlier message"),
         Message(role="assistant", content="Earlier reply"),
     ]
-    provider = MockProvider([
-        LLMResponse(content="Follow-up answer", tool_calls=[]),
-    ])
+    provider = MockProvider(
+        [
+            LLMResponse(content="Follow-up answer", tool_calls=[]),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, history = await brain.think("Follow-up", prior)
 
@@ -311,18 +314,22 @@ async def test_history_passed_through(tmp_memory, empty_skills):
 @pytest.mark.asyncio
 async def test_tool_call_and_response(tmp_memory, empty_skills):
     """Brain executes tool calls and returns the final text answer."""
-    provider = MockProvider([
-        # First response: tool call
-        LLMResponse(
-            content="",
-            tool_calls=[
-                ToolCall(id="tc1", name="remember", arguments={"note": "User likes cats"})
-            ],
-            stop_reason="tool_use",
-        ),
-        # Second response: final answer
-        LLMResponse(content="Got it, I'll remember that!", tool_calls=[]),
-    ])
+    provider = MockProvider(
+        [
+            # First response: tool call
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc1", name="remember", arguments={"note": "User likes cats"}
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            # Second response: final answer
+            LLMResponse(content="Got it, I'll remember that!", tool_calls=[]),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, history = await brain.think("I like cats", [])
 
@@ -333,19 +340,21 @@ async def test_tool_call_and_response(tmp_memory, empty_skills):
 @pytest.mark.asyncio
 async def test_ask_user_stops_loop_and_returns_question(tmp_memory, empty_skills):
     """When ask_user tool is called, think() returns the clarification question."""
-    provider = MockProvider([
-        LLMResponse(
-            content="",
-            tool_calls=[
-                ToolCall(
-                    id="q1",
-                    name="ask_user",
-                    arguments={"question": "What date do you mean?"},
-                )
-            ],
-            stop_reason="tool_use",
-        ),
-    ])
+    provider = MockProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="q1",
+                        name="ask_user",
+                        arguments={"question": "What date do you mean?"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, history = await brain.think("Schedule something", [])
 
@@ -423,9 +432,7 @@ async def test_take_files_clears_queue(brain, tmp_path):
 @pytest.mark.asyncio
 async def test_extract_uses_provider_directly(tmp_memory, empty_skills):
     """extract() bypasses the ReAct loop and calls provider.complete() with json_mode=True."""
-    provider = MockProvider(
-        [LLMResponse(content='{"name": "Atlas"}', tool_calls=[])]
-    )
+    provider = MockProvider([LLMResponse(content='{"name": "Atlas"}', tool_calls=[])])
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     result = await brain.extract("My name is Atlas", schema={"type": "object"})
     assert result == {"name": "Atlas"}
@@ -452,9 +459,11 @@ async def test_think_calls_on_status(tmp_memory, empty_skills):
     async def on_status(msg):
         received.append(msg)
 
-    provider = MockProvider([
-        LLMResponse(content="Done", tool_calls=[]),
-    ])
+    provider = MockProvider(
+        [
+            LLMResponse(content="Done", tool_calls=[]),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, _ = await brain.think("Hello", [], on_status=on_status)
 
@@ -469,9 +478,11 @@ async def test_think_on_status_exception_does_not_crash(tmp_memory, empty_skills
     async def bad_on_status(msg):
         raise RuntimeError("boom")
 
-    provider = MockProvider([
-        LLMResponse(content="All good", tool_calls=[]),
-    ])
+    provider = MockProvider(
+        [
+            LLMResponse(content="All good", tool_calls=[]),
+        ]
+    )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
     response, _ = await brain.think("Hello", [], on_status=bad_on_status)
 

@@ -87,7 +87,9 @@ async def run_maintenance(
         try:
             before, after = await _consolidate_awareness(provider)
             if before > 0:
-                results.append(f"Consolidated awareness log: {before} → {after} entries")
+                results.append(
+                    f"Consolidated awareness log: {before} → {after} entries"
+                )
         except Exception as e:
             logger.error(f"Awareness consolidation failed: {e}")
             results.append(f"Awareness consolidation failed: {e}")

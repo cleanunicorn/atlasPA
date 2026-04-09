@@ -11,7 +11,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
-from providers.base import BaseLLMProvider, LLMResponse, Message
+from providers.base import BaseLLMProvider, LLMResponse
 
 
 # ── Mock provider helper ───────────────────────────────────────────────────
@@ -522,7 +522,9 @@ async def test_run_maintenance_full(tmp_path, tmp_memory):
         def model_name(self):
             return "mock"
 
-        async def complete(self, messages, tools=None, system=None, max_tokens=4096, **kw):
+        async def complete(
+            self, messages, tools=None, system=None, max_tokens=4096, **kw
+        ):
             nonlocal call_count
             call_count += 1
             if call_count == 1:

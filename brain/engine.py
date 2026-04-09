@@ -193,9 +193,7 @@ class Brain:
             # Track token usage
             if response.usage:
                 self._session_tokens["input"] += response.usage.get("input_tokens", 0)
-                self._session_tokens["output"] += response.usage.get(
-                    "output_tokens", 0
-                )
+                self._session_tokens["output"] += response.usage.get("output_tokens", 0)
 
             # No tool calls → final answer
             if not response.tool_calls:
@@ -278,9 +276,7 @@ class Brain:
 
         tools = self._build_tools(state)
 
-        logger.info(
-            f"ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})"
-        )
+        logger.info(f"ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})")
 
         answer = await self._react_loop(system, messages, tools, state, on_status)
 

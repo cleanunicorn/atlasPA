@@ -90,7 +90,6 @@ def make_brain(
 
     This preserves the old test API while working with the new engine.
     """
-    import types
 
     provider = MockProvider(responses)
     brain = Brain(provider=provider, memory=memory, skills=skills)
@@ -138,7 +137,7 @@ def make_brain(
                         except Exception as e:
                             result = f"Error in {tc.name}: {e}"
                     elif tc.name.startswith("skill_"):
-                        skill = skills.get_skill(tc.name[len("skill_"):])
+                        skill = skills.get_skill(tc.name[len("skill_") :])
                         result = (
                             await skill.run(**tc.arguments)
                             if skill

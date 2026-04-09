@@ -197,9 +197,7 @@ class SessionManager:
     async def _cleanup_idle(self):
         now = time.time()
         to_close = [
-            sid
-            for sid, s in self._sessions.items()
-            if now - s.last_used > IDLE_TIMEOUT
+            sid for sid, s in self._sessions.items() if now - s.last_used > IDLE_TIMEOUT
         ]
         for sid in to_close:
             logger.info(f"Closing idle session {sid}")
@@ -259,7 +257,9 @@ async def execute_action(
     manager = _get_manager()
     timeout_ms = min(int(timeout), 120) * 1000
 
-    logger.info(f"Browser action={action} session={session_id or '(new)'} url={url[:80] if url else ''}")
+    logger.info(
+        f"Browser action={action} session={session_id or '(new)'} url={url[:80] if url else ''}"
+    )
 
     # Close doesn't need a live page
     if action == "close":
@@ -302,7 +302,9 @@ async def execute_action(
     # Dispatch
     logger.info(f"Dispatching action={action} (session {session.session_id})")
     result = await _dispatch(session, action, selector, value, tab_id, url, timeout_ms)
-    logger.info(f"Action {action} complete (session {session.session_id}, {len(result)} chars)")
+    logger.info(
+        f"Action {action} complete (session {session.session_id}, {len(result)} chars)"
+    )
     return f"{result}\nsession_id: {session.session_id}"
 
 
@@ -503,9 +505,7 @@ async def _action_scroll(page, value: str, selector: str) -> str:
         await page.evaluate(f"window.scrollBy(0, {amount})")
 
     scroll_pos = await page.evaluate("window.scrollY")
-    scroll_max = await page.evaluate(
-        "document.body.scrollHeight - window.innerHeight"
-    )
+    scroll_max = await page.evaluate("document.body.scrollHeight - window.innerHeight")
     return f"Scrolled. Position: {int(scroll_pos)}/{int(scroll_max)}px"
 
 
@@ -542,7 +542,9 @@ def _format_tabs(session: BrowserSession) -> str:
     return "\n".join(lines)
 
 
-async def _action_download(page, session: BrowserSession, selector: str, value: str) -> str:
+async def _action_download(
+    page, session: BrowserSession, selector: str, value: str
+) -> str:
     """Download a resource by selector (src/href) or direct URL (via value)."""
     url = ""
     if value and (value.startswith("http://") or value.startswith("https://")):
@@ -551,11 +553,7 @@ async def _action_download(page, session: BrowserSession, selector: str, value: 
         el = await page.query_selector(selector)
         if not el:
             return f"Error: no element matched: {selector}"
-        url = (
-            await el.get_attribute("src")
-            or await el.get_attribute("href")
-            or ""
-        )
+        url = await el.get_attribute("src") or await el.get_attribute("href") or ""
     if not url:
         return "Error: could not determine download URL. Provide a selector with src/href or a direct URL in 'value'."
     local = await _download_resource(page, url)
