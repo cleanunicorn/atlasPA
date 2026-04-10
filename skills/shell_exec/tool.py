@@ -1,12 +1,13 @@
 """
 skills/shell_exec/tool.py
 
-Run shell commands asynchronously with a timeout.
+Run shell commands with a timeout.
 Output (stdout + stderr combined) is returned as a string.
 """
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 PARAMETERS = {
@@ -52,27 +53,32 @@ async def run(command: str, timeout: int = 30, working_dir: str = "", **kwargs) 
         return f"Error: working directory does not exist: {cwd}"
 
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout
-            cwd=cwd,
-            env={**os.environ},
-        )
+        def _run_sync():
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=cwd,
+                    env={**os.environ},
+                    timeout=timeout,
+                )
+                return result.stdout, result.returncode, False
+            except subprocess.TimeoutExpired as exc:
+                return (exc.output or b""), None, True
 
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+        raw_stdout, returncode, timed_out = await asyncio.to_thread(_run_sync)
+
+        if timed_out:
             return f"Error: command timed out after {timeout}s\n$ {command}"
 
-        output = stdout.decode(errors="replace").rstrip()
+        output = raw_stdout.decode(errors="replace").rstrip()
 
         if not output:
-            output = f"(command exited with code {proc.returncode}, no output)"
-        elif proc.returncode != 0:
-            output = f"[exit code {proc.returncode}]\n{output}"
+            output = f"(command exited with code {returncode}, no output)"
+        elif returncode != 0:
+            output = f"[exit code {returncode}]\n{output}"
 
         if len(output) > MAX_OUTPUT_CHARS:
             half = MAX_OUTPUT_CHARS // 2
