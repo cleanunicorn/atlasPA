@@ -382,14 +382,8 @@ class Brain:
 
         query_text = _extract_text(user_message)
 
-        # Reuse cached tool selection, or run selection on first turn
-        if self._selected_tools is None:
-            self._selected_tools = await self._select_tools(query_text)
-            logger.info(f"Tool selection cached: {self._selected_tools}")
-        else:
-            logger.info(
-                f"Reusing cached tool selection: {self._selected_tools}"
-            )
+        # Choose the right list of tools for this query
+        self._selected_tools = await self._select_tools(query_text)
 
         # Build system prompt with only the selected skills
         selected_skill_names = [
