@@ -222,16 +222,21 @@ class SkillRegistry:
 
     # ── Query ──────────────────────────────────────────────────────────────────
 
-    def get_skills_summary(self) -> str:
+    def get_skills_summary(self, only: list[str] | None = None) -> str:
         """
         Compact index injected into the system prompt.
         Groups core and addon skills separately so the LLM knows what's user-installed.
+
+        If *only* is provided, include only skills whose name is in the list.
         """
-        if not self._skills:
+        skills = self._skills
+        if only is not None:
+            skills = {n: s for n, s in skills.items() if n in only}
+        if not skills:
             return "_No skills loaded._"
 
-        core = [(n, s) for n, s in self._skills.items() if s.source == "core"]
-        addon = [(n, s) for n, s in self._skills.items() if s.source == "addon"]
+        core = [(n, s) for n, s in skills.items() if s.source == "core"]
+        addon = [(n, s) for n, s in skills.items() if s.source == "addon"]
 
         lines = []
         if core:

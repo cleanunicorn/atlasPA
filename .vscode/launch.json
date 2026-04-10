@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Atlas",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "args": ["run"],
+            "console": "integratedTerminal"
+        }
+    ]
+}

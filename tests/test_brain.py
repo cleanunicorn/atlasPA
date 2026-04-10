@@ -108,7 +108,8 @@ def make_brain(
         from brain.engine import _extract_text
 
         state = _TurnState()
-        tools = brain._build_tools(state)
+        all_names, _ = brain._tool_catalog()
+        tools = brain._build_tools(state, selected_tools=all_names)
         tool_map = {t.name: t for t in tools}
 
         text = (

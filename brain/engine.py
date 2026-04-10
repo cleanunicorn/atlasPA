@@ -56,7 +56,13 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 30
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-SKILL_SELECTION_THRESHOLD = 5
+TOOL_SELECTION_THRESHOLD = 5
+
+# Tools that are always available regardless of selection
+_ALWAYS_INCLUDED_TOOLS = frozenset({
+    "ask_user",
+    "request_skills",
+})
 
 # ── Response sanitisation ────────────────────────────────────────────────────
 
@@ -130,15 +136,16 @@ class Brain:
         self._current_plan: str | None = None
         self.heartbeat = None
         self._session_tokens: dict[str, int] = {"input": 0, "output": 0}
+        self._selected_tools: list[str] | None = None  # cached tool/skill selection
 
         logger.info(f"Brain ready: {provider.model_name}")
 
     # ── Tool construction ────────────────────────────────────────────────────
 
-    def _build_tools(
-        self, state: _TurnState, selected_skills: list[str] | None = None
+    def _all_candidate_tools(
+        self, state: _TurnState
     ) -> list[BrainTool]:
-        """Build the full tool list for one turn: built-ins + filtered skills."""
+        """Build every possible tool (built-ins + all skills). Unfiltered."""
         tools = [
             _make_remember(self.memory),
             _make_forget(self.memory),
@@ -157,64 +164,98 @@ class Brain:
         ]
         if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
             tools.append(_make_run_claude())
-        # Append skill tools, optionally filtered by the skill selector
         for skill in self.skills._skills.values():
-            if selected_skills is not None and skill.name not in selected_skills:
-                continue
             try:
                 tools.append(_make_skill_tool(skill))
             except Exception as e:
                 logger.warning(f"Could not wrap skill '{skill.name}': {e}")
         return tools
 
-    # ── Skill selection ──────────────────────────────────────────────────────
+    def _build_tools(
+        self, state: _TurnState, selected_tools: list[str]
+    ) -> list[BrainTool]:
+        """Build the filtered tool list for one turn."""
+        selected = set(selected_tools) | _ALWAYS_INCLUDED_TOOLS
+        return [
+            t for t in self._all_candidate_tools(state)
+            if t.name in selected
+        ]
 
-    async def _select_skills(
-        self, query_text: str, skills_summary: str
-    ) -> list[str] | None:
-        """Pick relevant skills for a query via a lightweight LLM call.
+    # ── Tool selection ──────────────────────────────────────────────────────
 
-        Returns a list of skill names, or None to use all skills (fallback).
+    def _tool_catalog(self) -> tuple[list[str], str]:
+        """Build a catalog of all available tools (names + descriptions).
+
+        Returns (all_names, catalog_text) where catalog_text is a compact
+        summary suitable for the selection LLM call.
         """
-        num_skills = len(self.skills._skills)
-        if num_skills < SKILL_SELECTION_THRESHOLD:
+        state = _TurnState()
+        candidates = self._all_candidate_tools(state)
+        # Exclude always-included tools from the catalog — they're implicit
+        filterable = [t for t in candidates if t.name not in _ALWAYS_INCLUDED_TOOLS]
+        all_names = [t.name for t in filterable]
+        lines = []
+        for t in filterable:
+            # Truncate long descriptions to keep the prompt lean
+            desc = (t.description or "").split("\n")[0][:200]
+            lines.append(f"  - **{t.name}**: {desc}")
+        return all_names, "\n".join(lines)
+
+    async def _select_tools(self, query_text: str) -> list[str]:
+        """Pick relevant tools and skills for a query via a lightweight LLM call.
+
+        Returns a list of tool names to include. Always returns a concrete list.
+        Tools in _ALWAYS_INCLUDED_TOOLS are added automatically by _build_tools.
+        """
+        all_names, catalog = self._tool_catalog()
+        if len(all_names) < TOOL_SELECTION_THRESHOLD:
             logger.debug(
-                f"Skipping skill selection ({num_skills} < {SKILL_SELECTION_THRESHOLD})"
+                f"Skipping tool selection ({len(all_names)} < {TOOL_SELECTION_THRESHOLD})"
             )
-            return None
+            return all_names
 
         system = (
-            "You are a skill router. Given the user's request and a list of "
-            "available skills, return a JSON object with a single key \"skills\" "
-            "containing an array of skill names that are relevant to fulfilling "
-            "the request. Include only skills that are directly useful. "
+            "You are a tool router. Given the user's request and a list of "
+            "available tools, return a JSON object with a single key \"tools\" "
+            "containing an array of tool names that are relevant to fulfilling "
+            "the request. Include only tools that are directly useful. "
             "If none are relevant, return an empty array."
         )
         user_content = (
             f"User request: {query_text}\n\n"
-            f"Available skills:\n{skills_summary}"
+            f"Available tools:\n{catalog}"
         )
 
         try:
             response = await self.provider.complete(
                 messages=[Message(role="user", content=user_content)],
                 system=system,
-                max_tokens=256,
+                max_tokens=2048,
                 json_mode=True,
             )
             raw = (response.content or "").strip()
+            # Strip markdown fences that some providers wrap JSON in
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
+            logger.debug(f"Tool selector raw response: {raw}")
             data = _json.loads(raw)
-            selected = data.get("skills", [])
+            selected = data.get("tools", [])
             if not isinstance(selected, list):
                 raise ValueError(f"Expected list, got {type(selected)}")
-            # Validate against actual skill names
-            valid = self.skills.all_skill_names()
-            selected = [s for s in selected if s in valid]
-            logger.info(f"Skill selector chose {len(selected)}/{num_skills}: {selected}")
-            return selected
+            # Validate against actual tool names
+            valid = set(all_names)
+            filtered = [s for s in selected if s in valid]
+            dropped = [s for s in selected if s not in valid]
+            if dropped:
+                logger.warning(f"Tool selector returned unknown tools: {dropped}")
+            logger.info(
+                f"Tool selector chose {len(filtered)}/{len(all_names)}: {filtered}"
+            )
+            return filtered
         except Exception as e:
-            logger.warning(f"Skill selection failed, using all skills: {e}")
-            return None
+            logger.warning(f"Tool selection failed, using all tools: {e}")
+            return all_names
 
     # ── ReAct loop ──────────────────────────────────────────────────────────
 
@@ -306,6 +347,9 @@ class Brain:
                             try:
                                 new_tool = _make_skill_tool(skill)
                                 tool_map[new_tool.name] = new_tool
+                                # Persist to cached selection
+                                if new_tool.name not in self._selected_tools:
+                                    self._selected_tools.append(new_tool.name)
                             except Exception as e:
                                 logger.warning(f"Could not load skill '{skill_name}': {e}")
                 state.requested_skills.clear()
@@ -338,8 +382,26 @@ class Brain:
 
         query_text = _extract_text(user_message)
 
-        skills_summary = self.skills.get_skills_summary()
-        system = await self.memory.build_system_prompt(skills_summary, query=query_text)
+        # Reuse cached tool selection, or run selection on first turn
+        if self._selected_tools is None:
+            self._selected_tools = await self._select_tools(query_text)
+            logger.info(f"Tool selection cached: {self._selected_tools}")
+        else:
+            logger.info(
+                f"Reusing cached tool selection: {self._selected_tools}"
+            )
+
+        # Build system prompt with only the selected skills
+        selected_skill_names = [
+            n for n in self._selected_tools
+            if n.startswith("skill_")
+        ]
+        # Strip the skill_ prefix for the registry lookup
+        skill_names = [n[len("skill_"):] for n in selected_skill_names]
+        filtered_summary = self.skills.get_skills_summary(only=skill_names)
+        system = await self.memory.build_system_prompt(
+            filtered_summary, query=query_text
+        )
         if system_suffix:
             system += "\n\n---\n" + system_suffix
 
@@ -347,10 +409,13 @@ class Brain:
             Message(role="user", content=user_message)
         ]
 
-        selected_skills = await self._select_skills(query_text, skills_summary)
-        tools = self._build_tools(state, selected_skills)
+        tools = self._build_tools(state, self._selected_tools)
 
-        logger.info(f"ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})")
+        tool_names = [t.name for t in tools]
+        logger.info(
+            f"ReAct starting ({len(tools)} tools: {tool_names}, "
+            f"max_iters={MAX_ITERATIONS})"
+        )
 
         answer = await self._react_loop(system, messages, tools, state, on_status)
 

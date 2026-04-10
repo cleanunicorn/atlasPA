@@ -31,7 +31,7 @@ from brain.engine import (
     _make_reload,
     _make_request_skills,
     _clean_response,
-    SKILL_SELECTION_THRESHOLD,
+    TOOL_SELECTION_THRESHOLD,
 )
 
 
@@ -280,6 +280,12 @@ def test_reload_sets_flag():
 # ── Integration: Brain.think() with mocked provider ────────────────────────
 
 
+def _precache_tools(brain):
+    """Pre-cache tool selection so think() doesn't make a selection LLM call."""
+    all_names, _ = brain._tool_catalog()
+    brain._selected_tools = all_names
+
+
 @pytest.mark.asyncio
 async def test_basic_response(tmp_memory, empty_skills):
     """Brain.think() returns the answer from the LLM."""
@@ -289,6 +295,7 @@ async def test_basic_response(tmp_memory, empty_skills):
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, history = await brain.think("Hi", [])
 
     assert response == "Hello there!"
@@ -310,6 +317,7 @@ async def test_history_passed_through(tmp_memory, empty_skills):
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, history = await brain.think("Follow-up", prior)
 
     assert history[0].content == "Earlier message"
@@ -337,6 +345,7 @@ async def test_tool_call_and_response(tmp_memory, empty_skills):
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, history = await brain.think("I like cats", [])
 
     assert response == "Got it, I'll remember that!"
@@ -362,6 +371,7 @@ async def test_ask_user_stops_loop_and_returns_question(tmp_memory, empty_skills
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, history = await brain.think("Schedule something", [])
 
     assert response == "What date do you mean?"
@@ -372,7 +382,7 @@ async def test_ask_user_stops_loop_and_returns_question(tmp_memory, empty_skills
 async def test_remember_tool_invoked_writes_memory(brain, tmp_memory):
     """The remember tool closure writes to memory when called during think()."""
     state = _TurnState()
-    tools = brain._build_tools(state)
+    tools = brain._build_tools(state, selected_tools=["remember"])
     remember_tool = next(t for t in tools if t.name == "remember")
     remember_tool.func(note="User loves hiking.")
     assert "User loves hiking." in tmp_memory.load_context()
@@ -385,7 +395,7 @@ async def test_send_file_delivered_after_think(brain, tmp_path):
     f.write_bytes(b"\x89PNG")
 
     state = _TurnState()
-    tools = brain._build_tools(state)
+    tools = brain._build_tools(state, selected_tools=["send_file"])
     send_file_tool = next(t for t in tools if t.name == "send_file")
     send_file_tool.func(path=str(f), caption="Your chart")
 
@@ -417,7 +427,8 @@ async def test_skill_tool_in_brain(tmp_path, tmp_memory):
         b = Brain(provider=MockProvider(), memory=tmp_memory, skills=skills)
 
     state = _TurnState()
-    tools = b._build_tools(state)
+    all_names, _ = b._tool_catalog()
+    tools = b._build_tools(state, selected_tools=all_names)
     greeter = next((t for t in tools if t.name == "skill_greeter"), None)
     assert greeter is not None
     assert greeter.func(name="Atlas") == "Hello, Atlas!"
@@ -471,6 +482,7 @@ async def test_think_calls_on_status(tmp_memory, empty_skills):
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, _ = await brain.think("Hello", [], on_status=on_status)
 
     assert response == "Done"
@@ -490,6 +502,7 @@ async def test_think_on_status_exception_does_not_crash(tmp_memory, empty_skills
         ]
     )
     brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
+    _precache_tools(brain)
     response, _ = await brain.think("Hello", [], on_status=bad_on_status)
 
     assert response == "All good"
@@ -518,77 +531,97 @@ def _make_multi_skill_registry(tmp_path, count):
 
 
 @pytest.mark.asyncio
-async def test_select_skills_skips_below_threshold(tmp_memory, tmp_path):
-    """_select_skills returns None when skill count < threshold."""
-    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD - 1)
+async def test_select_tools_skips_below_threshold(tmp_memory, empty_skills):
+    """_select_tools returns all tool names when count < threshold (no LLM call)."""
     provider = MockProvider()
-    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+    brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
 
-    result = await brain._select_skills("hello", "some summary")
-    assert result is None
+    result = await brain._select_tools("hello")
+    all_names, _ = brain._tool_catalog()
+    assert result == all_names
     assert provider._call_count == 0  # no LLM call made
 
 
 @pytest.mark.asyncio
-async def test_select_skills_calls_provider(tmp_memory, tmp_path):
-    """_select_skills makes an LLM call and parses the JSON response."""
-    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
-    response_json = '{"skills": ["skill_0", "skill_2"]}'
+async def test_select_tools_calls_provider(tmp_memory, tmp_path):
+    """_select_tools makes an LLM call and parses the JSON response."""
+    skills = _make_multi_skill_registry(tmp_path, TOOL_SELECTION_THRESHOLD + 1)
+    response_json = '{"tools": ["remember", "skill_skill_0"]}'
     provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
     brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-    result = await brain._select_skills("do something", skills.get_skills_summary())
-    assert result == ["skill_0", "skill_2"]
+    result = await brain._select_tools("do something")
+    assert "remember" in result
+    assert "skill_skill_0" in result
     assert provider._call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_select_skills_fallback_on_bad_json(tmp_memory, tmp_path):
-    """_select_skills returns None (all skills) when provider returns garbage."""
-    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
+async def test_select_tools_fallback_on_bad_json(tmp_memory, tmp_path):
+    """_select_tools returns all tool names when provider returns garbage."""
+    skills = _make_multi_skill_registry(tmp_path, TOOL_SELECTION_THRESHOLD + 1)
     provider = MockProvider([LLMResponse(content="not json at all", tool_calls=[])])
     brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-    result = await brain._select_skills("query", "summary")
-    assert result is None
+    result = await brain._select_tools("query")
+    all_names, _ = brain._tool_catalog()
+    assert result == all_names
 
 
 @pytest.mark.asyncio
-async def test_select_skills_filters_invalid_names(tmp_memory, tmp_path):
-    """_select_skills drops skill names that don't exist in the registry."""
-    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
-    response_json = '{"skills": ["skill_0", "nonexistent_skill"]}'
+async def test_select_tools_strips_markdown_fences(tmp_memory, tmp_path):
+    """_select_tools handles JSON wrapped in markdown code fences."""
+    skills = _make_multi_skill_registry(tmp_path, TOOL_SELECTION_THRESHOLD + 1)
+    fenced = '```json\n{"tools": ["skill_skill_1"]}\n```'
+    provider = MockProvider([LLMResponse(content=fenced, tool_calls=[])])
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    result = await brain._select_tools("query")
+    assert result == ["skill_skill_1"]
+
+
+@pytest.mark.asyncio
+async def test_select_tools_filters_invalid_names(tmp_memory, tmp_path):
+    """_select_tools drops tool names that don't exist."""
+    skills = _make_multi_skill_registry(tmp_path, TOOL_SELECTION_THRESHOLD + 1)
+    response_json = '{"tools": ["remember", "nonexistent_tool"]}'
     provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
     brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-    result = await brain._select_skills("query", skills.get_skills_summary())
-    assert result == ["skill_0"]
+    result = await brain._select_tools("query")
+    assert result == ["remember"]
 
 
-def test_build_tools_filters_skills(tmp_memory, tmp_path):
-    """_build_tools with selected_skills only includes matching skill tools."""
+def test_build_tools_filters_all(tmp_memory, tmp_path):
+    """_build_tools filters both built-in tools and skills."""
     skills = _make_multi_skill_registry(tmp_path, 3)
     brain = Brain(provider=MockProvider(), memory=tmp_memory, skills=skills)
     state = _TurnState()
 
-    all_tools = brain._build_tools(state, selected_skills=None)
-    filtered_tools = brain._build_tools(state, selected_skills=["skill_1"])
+    # Select only remember + one skill
+    tools = brain._build_tools(state, selected_tools=["remember", "skill_skill_1"])
+    names = [t.name for t in tools]
 
-    all_skill_tools = [t for t in all_tools if t.name.startswith("skill_")]
-    filtered_skill_tools = [t for t in filtered_tools if t.name.startswith("skill_")]
+    # Should have: remember, skill_skill_1, plus always-included (ask_user, request_skills)
+    assert "remember" in names
+    assert "skill_skill_1" in names
+    assert "ask_user" in names
+    assert "request_skills" in names
+    # Should NOT have other built-ins or skills
+    assert "forget" not in names
+    assert "skill_skill_0" not in names
+    assert "skill_skill_2" not in names
 
-    assert len(all_skill_tools) == 3
-    assert len(filtered_skill_tools) == 1
-    assert filtered_skill_tools[0].name == "skill_skill_1"
 
-
-def test_build_tools_includes_request_skills(tmp_memory, empty_skills):
-    """_build_tools always includes the request_skills tool."""
+def test_build_tools_always_includes_essentials(tmp_memory, empty_skills):
+    """_build_tools always includes ask_user and request_skills even with empty selection."""
     brain = Brain(provider=MockProvider(), memory=tmp_memory, skills=empty_skills)
     state = _TurnState()
-    tools = brain._build_tools(state)
+    tools = brain._build_tools(state, selected_tools=[])
     names = [t.name for t in tools]
     assert "request_skills" in names
+    assert "ask_user" in names
+    assert len(names) == 2  # only the always-included tools
 
 
 def test_request_skills_tool_validates_names(tmp_path, tmp_memory):
