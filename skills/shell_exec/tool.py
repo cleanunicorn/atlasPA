@@ -1,12 +1,14 @@
 """
 skills/shell_exec/tool.py
 
-Run shell commands asynchronously with a timeout.
+Run shell commands in a thread-pool executor to avoid asyncio event loop
+conflicts when called alongside other async tools (browser, HTTP, etc.).
 Output (stdout + stderr combined) is returned as a string.
 """
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 PARAMETERS = {
@@ -37,6 +39,10 @@ async def run(command: str, timeout: int = 30, working_dir: str = "", **kwargs) 
     """
     Execute a shell command and return combined stdout + stderr.
 
+    The command runs inside a thread-pool executor so it never competes with
+    the running event loop (avoiding "Cannot run the event loop while another
+    loop is running" errors when other async tools are active).
+
     Args:
         command:     Shell command string.
         timeout:     Max seconds to wait (capped at MAX_TIMEOUT).
@@ -51,28 +57,36 @@ async def run(command: str, timeout: int = 30, working_dir: str = "", **kwargs) 
     if not cwd.exists():
         return f"Error: working directory does not exist: {cwd}"
 
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout
-            cwd=cwd,
-            env={**os.environ},
-        )
-
+    def _run_blocking() -> tuple[bytes, int | None, bool]:
+        """Run the subprocess synchronously; returns (output, returncode, timed_out)."""
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            proc = subprocess.run(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout
+                cwd=cwd,
+                env={**os.environ},
+                timeout=timeout,
+            )
+            return proc.stdout, proc.returncode, False
+        except subprocess.TimeoutExpired as exc:
+            # exc.stdout may contain partial output captured before the kill
+            return exc.stdout or b"", None, True
+
+    try:
+        loop = asyncio.get_event_loop()
+        stdout, returncode, timed_out = await loop.run_in_executor(None, _run_blocking)
+
+        if timed_out:
             return f"Error: command timed out after {timeout}s\n$ {command}"
 
         output = stdout.decode(errors="replace").rstrip()
 
         if not output:
-            output = f"(command exited with code {proc.returncode}, no output)"
-        elif proc.returncode != 0:
-            output = f"[exit code {proc.returncode}]\n{output}"
+            output = f"(command exited with code {returncode}, no output)"
+        elif returncode != 0:
+            output = f"[exit code {returncode}]\n{output}"
 
         if len(output) > MAX_OUTPUT_CHARS:
             half = MAX_OUTPUT_CHARS // 2
