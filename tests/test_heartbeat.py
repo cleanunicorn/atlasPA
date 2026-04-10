@@ -408,8 +408,6 @@ def test_check_for_update_new_commits(monkeypatch):
     """Returns (True, ...) when the remote is ahead of local HEAD."""
     from heartbeat.updater import check_for_update
 
-    call_count = {"n": 0}
-
     def fake_run(*args, **kwargs):
         cmd = args[0]
         if "fetch" in cmd:

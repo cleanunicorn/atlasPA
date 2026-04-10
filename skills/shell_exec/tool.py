@@ -53,6 +53,7 @@ async def run(command: str, timeout: int = 30, working_dir: str = "", **kwargs) 
         return f"Error: working directory does not exist: {cwd}"
 
     try:
+
         def _run_sync():
             try:
                 result = subprocess.run(

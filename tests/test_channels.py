@@ -266,7 +266,9 @@ def _make_telegram_bot(brain):
     return bot
 
 
-def _make_update(replied_text=None, replied_caption=None, replied_media=None, sender_name=None):
+def _make_update(
+    replied_text=None, replied_caption=None, replied_media=None, sender_name=None
+):
     """Build a minimal mock Update with an optional reply_to_message."""
     from unittest.mock import MagicMock
 

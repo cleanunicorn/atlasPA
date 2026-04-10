@@ -43,6 +43,7 @@ async def run(code: str, timeout: int = 15, **kwargs) -> str:
     timeout = min(int(timeout), MAX_TIMEOUT)
 
     try:
+
         def _run_sync():
             try:
                 result = subprocess.run(

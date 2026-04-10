@@ -471,7 +471,9 @@ class TelegramBot:
             return
 
         reply_ctx = self._build_reply_context(update)
-        user_text = (reply_ctx + update.message.text) if reply_ctx else update.message.text
+        user_text = (
+            (reply_ctx + update.message.text) if reply_ctx else update.message.text
+        )
         user_id = str(user.id)
 
         logger.info(f"Message from {user.username or user.id}: {user_text[:100]}")

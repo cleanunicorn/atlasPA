@@ -9,6 +9,7 @@ Structure:
   - Integration tests for Brain.think() with provider mocked
 """
 
+import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -113,7 +114,8 @@ def test_run_skill_sync_with_sync_skill():
     assert _run_skill_sync(skill, {"query": "test"}) == "result: test"
 
 
-def test_run_skill_sync_with_async_skill():
+@pytest.mark.asyncio
+async def test_run_skill_sync_with_async_skill():
     skill = MagicMock()
 
     async def async_run(**kwargs):
@@ -121,7 +123,9 @@ def test_run_skill_sync_with_async_skill():
 
     skill._module.run = async_run
     result = _run_skill_sync(skill, {"query": "hello"})
-    assert result == "async: hello"
+    # _run_skill_sync returns the coroutine for the caller to await
+    assert asyncio.iscoroutine(result)
+    assert await result == "async: hello"
 
 
 def test_run_skill_sync_returns_string():

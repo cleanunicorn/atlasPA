@@ -7,7 +7,6 @@ Each factory returns a BrainTool that pairs a callable with the metadata
 needed to build a ToolDefinition for the provider's complete() call.
 """
 
-import asyncio
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -75,15 +74,15 @@ class _TurnState:
 # ── Async skill bridge ───────────────────────────────────────────────────────
 
 
-def _run_skill_sync(skill: Skill, kwargs: dict) -> str:
-    """Run a skill's run() inside the calling thread (may be a worker thread)."""
+def _run_skill_sync(skill: Skill, kwargs: dict):
+    """Run a skill's run() function.
+
+    If the skill is async, returns the coroutine so the caller
+    (_execute_tool) can await it — avoids nesting event loops.
+    """
     result = skill._module.run(**kwargs)
     if inspect.iscoroutine(result):
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(result)
-        finally:
-            loop.close()
+        return result
     return str(result)
 
 
@@ -364,7 +363,10 @@ def _make_update_self(brain_ref) -> BrainTool:
         # Check whether an update is actually available
         if brain_ref.heartbeat:
             try:
-                update_available, check_msg = await brain_ref.heartbeat.check_for_update()
+                (
+                    update_available,
+                    check_msg,
+                ) = await brain_ref.heartbeat.check_for_update()
                 if not update_available:
                     return f"No update available — {check_msg}"
             except Exception as e:
