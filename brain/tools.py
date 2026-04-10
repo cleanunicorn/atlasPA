@@ -69,6 +69,7 @@ class _TurnState:
     restart_requested: bool = False  # set by reload
     pending_files: list = field(default_factory=list)  # (Path, caption)
     current_plan: str | None = None
+    requested_skills: list = field(default_factory=list)  # set by request_skills
 
 
 # ── Async skill bridge ───────────────────────────────────────────────────────
@@ -440,6 +441,33 @@ def _make_update_self(brain_ref) -> BrainTool:
         parameters={"type": "object", "properties": {}},
         func=update_self,
     )
+
+
+def _make_request_skills(state: _TurnState, skills: SkillRegistry) -> BrainTool:
+    available = skills.all_skill_names()
+    catalog = ", ".join(available) if available else "(none)"
+
+    def request_skills(skill_names: str) -> str:
+        """Request additional skills to be loaded as tools. Use this when you need a skill that wasn't initially available. Pass a comma-separated list of skill names."""
+        names = [n.strip() for n in skill_names.split(",") if n.strip()]
+        loaded, not_found = [], []
+        for name in names:
+            if name in available:
+                loaded.append(name)
+                if name not in state.requested_skills:
+                    state.requested_skills.append(name)
+            else:
+                not_found.append(name)
+        parts = []
+        if loaded:
+            parts.append(f"Loading skills: {', '.join(loaded)}")
+        if not_found:
+            parts.append(f"Not found: {', '.join(not_found)}")
+        return " | ".join(parts) or "No skill names provided."
+
+    request_skills.__doc__ += f"\n\nAvailable skills: {catalog}"
+
+    return _tool(request_skills)
 
 
 def _make_manage_skills(skills: SkillRegistry) -> BrainTool:

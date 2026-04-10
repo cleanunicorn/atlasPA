@@ -8,6 +8,7 @@ Also exports shared test helpers (MockProvider, make_brain, fixtures) used by
 test_channels.py and test_heartbeat.py.
 """
 
+import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import patch
@@ -134,6 +135,8 @@ def make_brain(
                     if tool is not None:
                         try:
                             result = tool(**tc.arguments)
+                            if asyncio.iscoroutine(result):
+                                result = await result
                         except Exception as e:
                             result = f"Error in {tc.name}: {e}"
                     elif tc.name.startswith("skill_"):

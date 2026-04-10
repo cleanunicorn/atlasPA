@@ -49,12 +49,14 @@ from brain.tools import (  # noqa: F401 — re-exported for tests
     _make_manage_skills,
     _make_run_claude,
     _make_update_self,
+    _make_request_skills,
 )
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 30
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+SKILL_SELECTION_THRESHOLD = 5
 
 # ── Response sanitisation ────────────────────────────────────────────────────
 
@@ -133,8 +135,10 @@ class Brain:
 
     # ── Tool construction ────────────────────────────────────────────────────
 
-    def _build_tools(self, state: _TurnState) -> list[BrainTool]:
-        """Build the full tool list for one turn: built-ins + skills."""
+    def _build_tools(
+        self, state: _TurnState, selected_skills: list[str] | None = None
+    ) -> list[BrainTool]:
+        """Build the full tool list for one turn: built-ins + filtered skills."""
         tools = [
             _make_remember(self.memory),
             _make_forget(self.memory),
@@ -149,16 +153,68 @@ class Brain:
             _make_reload(state),
             _make_manage_skills(self.skills),
             _make_update_self(self),
+            _make_request_skills(state, self.skills),
         ]
         if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
             tools.append(_make_run_claude())
-        # Append skill tools (rebuilt each call to pick up newly installed addons)
+        # Append skill tools, optionally filtered by the skill selector
         for skill in self.skills._skills.values():
+            if selected_skills is not None and skill.name not in selected_skills:
+                continue
             try:
                 tools.append(_make_skill_tool(skill))
             except Exception as e:
                 logger.warning(f"Could not wrap skill '{skill.name}': {e}")
         return tools
+
+    # ── Skill selection ──────────────────────────────────────────────────────
+
+    async def _select_skills(
+        self, query_text: str, skills_summary: str
+    ) -> list[str] | None:
+        """Pick relevant skills for a query via a lightweight LLM call.
+
+        Returns a list of skill names, or None to use all skills (fallback).
+        """
+        num_skills = len(self.skills._skills)
+        if num_skills < SKILL_SELECTION_THRESHOLD:
+            logger.debug(
+                f"Skipping skill selection ({num_skills} < {SKILL_SELECTION_THRESHOLD})"
+            )
+            return None
+
+        system = (
+            "You are a skill router. Given the user's request and a list of "
+            "available skills, return a JSON object with a single key \"skills\" "
+            "containing an array of skill names that are relevant to fulfilling "
+            "the request. Include only skills that are directly useful. "
+            "If none are relevant, return an empty array."
+        )
+        user_content = (
+            f"User request: {query_text}\n\n"
+            f"Available skills:\n{skills_summary}"
+        )
+
+        try:
+            response = await self.provider.complete(
+                messages=[Message(role="user", content=user_content)],
+                system=system,
+                max_tokens=256,
+                json_mode=True,
+            )
+            raw = (response.content or "").strip()
+            data = _json.loads(raw)
+            selected = data.get("skills", [])
+            if not isinstance(selected, list):
+                raise ValueError(f"Expected list, got {type(selected)}")
+            # Validate against actual skill names
+            valid = self.skills.all_skill_names()
+            selected = [s for s in selected if s in valid]
+            logger.info(f"Skill selector chose {len(selected)}/{num_skills}: {selected}")
+            return selected
+        except Exception as e:
+            logger.warning(f"Skill selection failed, using all skills: {e}")
+            return None
 
     # ── ReAct loop ──────────────────────────────────────────────────────────
 
@@ -241,6 +297,21 @@ class Brain:
                 if state.clarification or state.restart_requested:
                     return response.content or ""
 
+            # Hot-load skills requested mid-loop via request_skills tool
+            if state.requested_skills:
+                for skill_name in state.requested_skills:
+                    if f"skill_{skill_name}" not in tool_map:
+                        skill = self.skills.get_skill(skill_name)
+                        if skill:
+                            try:
+                                new_tool = _make_skill_tool(skill)
+                                tool_map[new_tool.name] = new_tool
+                            except Exception as e:
+                                logger.warning(f"Could not load skill '{skill_name}': {e}")
+                state.requested_skills.clear()
+                tool_defs = [t.to_definition() for t in tool_map.values()]
+                logger.info(f"Tools updated mid-loop, now {len(tool_defs)} tools")
+
             logger.debug(f"ReAct iteration {i + 1}/{MAX_ITERATIONS} complete")
 
         logger.warning("ReAct loop hit max iterations")
@@ -276,7 +347,8 @@ class Brain:
             Message(role="user", content=user_message)
         ]
 
-        tools = self._build_tools(state)
+        selected_skills = await self._select_skills(query_text, skills_summary)
+        tools = self._build_tools(state, selected_skills)
 
         logger.info(f"ReAct starting ({len(tools)} tools, max_iters={MAX_ITERATIONS})")
 

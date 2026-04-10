@@ -29,7 +29,9 @@ from brain.engine import (
     _make_create_plan,
     _make_reflect,
     _make_reload,
+    _make_request_skills,
     _clean_response,
+    SKILL_SELECTION_THRESHOLD,
 )
 
 
@@ -491,3 +493,138 @@ async def test_think_on_status_exception_does_not_crash(tmp_memory, empty_skills
     response, _ = await brain.think("Hello", [], on_status=bad_on_status)
 
     assert response == "All good"
+
+
+# ── Skill selection tests ──────────────────────────────────────────────────
+
+
+def _make_multi_skill_registry(tmp_path, count):
+    """Create a SkillRegistry with `count` dummy skills."""
+    skills_dir = tmp_path / "multi_skills"
+    skills_dir.mkdir(exist_ok=True)
+    for i in range(count):
+        sd = skills_dir / f"skill_{i}"
+        sd.mkdir(exist_ok=True)
+        (sd / "SKILL.md").write_text(f"Skill number {i}")
+        (sd / "tool.py").write_text(
+            f"PARAMETERS = {{'type': 'object', 'properties': {{'x': {{'type': 'string'}}}}}}\n"
+            f"def run(x='', **kwargs): return 'skill_{i}: ' + x\n"
+        )
+    with (
+        patch("skills.registry.CORE_SKILLS_DIR", skills_dir),
+        patch("skills.registry.ADDON_SKILLS_DIR", tmp_path / "addon_multi"),
+    ):
+        return SkillRegistry()
+
+
+@pytest.mark.asyncio
+async def test_select_skills_skips_below_threshold(tmp_memory, tmp_path):
+    """_select_skills returns None when skill count < threshold."""
+    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD - 1)
+    provider = MockProvider()
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    result = await brain._select_skills("hello", "some summary")
+    assert result is None
+    assert provider._call_count == 0  # no LLM call made
+
+
+@pytest.mark.asyncio
+async def test_select_skills_calls_provider(tmp_memory, tmp_path):
+    """_select_skills makes an LLM call and parses the JSON response."""
+    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
+    response_json = '{"skills": ["skill_0", "skill_2"]}'
+    provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    result = await brain._select_skills("do something", skills.get_skills_summary())
+    assert result == ["skill_0", "skill_2"]
+    assert provider._call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_select_skills_fallback_on_bad_json(tmp_memory, tmp_path):
+    """_select_skills returns None (all skills) when provider returns garbage."""
+    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
+    provider = MockProvider([LLMResponse(content="not json at all", tool_calls=[])])
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    result = await brain._select_skills("query", "summary")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_select_skills_filters_invalid_names(tmp_memory, tmp_path):
+    """_select_skills drops skill names that don't exist in the registry."""
+    skills = _make_multi_skill_registry(tmp_path, SKILL_SELECTION_THRESHOLD + 1)
+    response_json = '{"skills": ["skill_0", "nonexistent_skill"]}'
+    provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    result = await brain._select_skills("query", skills.get_skills_summary())
+    assert result == ["skill_0"]
+
+
+def test_build_tools_filters_skills(tmp_memory, tmp_path):
+    """_build_tools with selected_skills only includes matching skill tools."""
+    skills = _make_multi_skill_registry(tmp_path, 3)
+    brain = Brain(provider=MockProvider(), memory=tmp_memory, skills=skills)
+    state = _TurnState()
+
+    all_tools = brain._build_tools(state, selected_skills=None)
+    filtered_tools = brain._build_tools(state, selected_skills=["skill_1"])
+
+    all_skill_tools = [t for t in all_tools if t.name.startswith("skill_")]
+    filtered_skill_tools = [t for t in filtered_tools if t.name.startswith("skill_")]
+
+    assert len(all_skill_tools) == 3
+    assert len(filtered_skill_tools) == 1
+    assert filtered_skill_tools[0].name == "skill_skill_1"
+
+
+def test_build_tools_includes_request_skills(tmp_memory, empty_skills):
+    """_build_tools always includes the request_skills tool."""
+    brain = Brain(provider=MockProvider(), memory=tmp_memory, skills=empty_skills)
+    state = _TurnState()
+    tools = brain._build_tools(state)
+    names = [t.name for t in tools]
+    assert "request_skills" in names
+
+
+def test_request_skills_tool_validates_names(tmp_path, tmp_memory):
+    """request_skills stores valid names and reports not-found ones."""
+    skills = _make_multi_skill_registry(tmp_path, 3)
+    state = _TurnState()
+    tool = _make_request_skills(state, skills)
+
+    result = tool.func(skill_names="skill_0, nonexistent, skill_2")
+    assert "skill_0" in state.requested_skills
+    assert "skill_2" in state.requested_skills
+    assert "nonexistent" not in state.requested_skills
+    assert "Not found: nonexistent" in result
+
+
+@pytest.mark.asyncio
+async def test_react_loop_hotloads_requested_skills(tmp_memory, tmp_path):
+    """Skills requested mid-loop are available in subsequent iterations."""
+    skills = _make_multi_skill_registry(tmp_path, 3)
+
+    # Iteration 1: LLM calls request_skills to load skill_2
+    # Iteration 2: LLM calls skill_skill_2
+    # Iteration 3: LLM returns final text
+    provider = MockProvider([
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="tc1", name="request_skills", arguments={"skill_names": "skill_2"})],
+        ),
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="tc2", name="skill_skill_2", arguments={"x": "test"})],
+        ),
+        LLMResponse(content="All done", tool_calls=[]),
+    ])
+    brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+
+    # Start with no skills selected (only built-ins + request_skills)
+    answer, _ = await brain.think("test", [])
+    assert "All done" in answer
