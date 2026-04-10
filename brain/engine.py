@@ -296,7 +296,16 @@ class Brain:
 
             # No tool calls → final answer
             if not response.tool_calls:
-                return response.content or "Done."
+                if response.content:
+                    return response.content
+                # Model returned empty content; ask it to summarize
+                messages.append(
+                    Message(role="user", content="Summarize what you did.")
+                )
+                summary = await self.provider.complete(
+                    messages=messages, system=system, max_tokens=MAX_TOKENS,
+                )
+                return summary.content or "Done."
 
             # Append assistant message with tool calls
             messages.append(
@@ -359,7 +368,16 @@ class Brain:
             logger.debug(f"ReAct iteration {i + 1}/{MAX_ITERATIONS} complete")
 
         logger.warning("ReAct loop hit max iterations")
-        return response.content or "Done."
+        if response.content:
+            return response.content
+        # Model returned empty content; ask it to summarize
+        messages.append(
+            Message(role="user", content="Summarize what you did.")
+        )
+        summary = await self.provider.complete(
+            messages=messages, system=system, max_tokens=MAX_TOKENS,
+        )
+        return summary.content or "Done."
 
     # ── Public interface ─────────────────────────────────────────────────────
 
