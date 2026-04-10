@@ -48,6 +48,7 @@ from brain.tools import (  # noqa: F401 — re-exported for tests
     _make_reload,
     _make_manage_skills,
     _make_run_claude,
+    _make_update_self,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,7 @@ class Brain:
             _make_reflect(),
             _make_reload(state),
             _make_manage_skills(self.skills),
+            _make_update_self(self),
         ]
         if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
             tools.append(_make_run_claude())
