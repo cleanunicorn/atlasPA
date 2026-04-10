@@ -352,6 +352,94 @@ def _make_run_claude() -> BrainTool:
     return _tool(run_claude)
 
 
+def _make_update_self(brain_ref) -> BrainTool:
+    async def update_self() -> str:
+        """Update Atlas to the latest version from GitHub: pulls new code, reinstalls dependencies, and restarts the service. Ask the user for confirmation before calling this."""
+        import os as _os
+        import signal as _signal
+        import subprocess as _subprocess
+
+        root = Path(__file__).parent.parent.resolve()
+
+        # Check whether an update is actually available
+        if brain_ref.heartbeat:
+            try:
+                update_available, check_msg = await brain_ref.heartbeat.check_for_update()
+                if not update_available:
+                    return f"No update available — {check_msg}"
+            except Exception as e:
+                logger.warning(f"Pre-update check failed: {e}")
+
+        # ── Step 1: git pull ────────────────────────────────────────────────────
+        try:
+            result = _subprocess.run(
+                ["git", "pull"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=root,
+            )
+            pull_out = (result.stdout + result.stderr).strip()
+            if result.returncode != 0:
+                return f"❌ git pull failed:\n{pull_out}"
+        except Exception as e:
+            return f"❌ git pull failed: {e}"
+
+        # ── Step 2: uv sync (install new / updated dependencies) ───────────────
+        try:
+            result = _subprocess.run(
+                ["uv", "sync"],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                cwd=root,
+            )
+            sync_out = (result.stdout + result.stderr).strip()
+            if result.returncode != 0:
+                return f"❌ uv sync failed:\n{sync_out}\n\ngit pull output:\n{pull_out}"
+        except FileNotFoundError:
+            sync_out = "uv not found — skipping dependency sync"
+            logger.warning(sync_out)
+        except Exception as e:
+            return f"❌ uv sync failed: {e}\n\ngit pull output:\n{pull_out}"
+
+        logger.info(f"Update applied — git pull: {pull_out[:80]}")
+
+        # ── Step 3: restart ─────────────────────────────────────────────────────
+        # Try systemd first (the normal production deployment path).
+        try:
+            result = _subprocess.run(
+                ["systemctl", "--user", "restart", "atlas"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return (
+                    f"✅ Atlas updated and restarted via systemd.\n\n"
+                    f"git pull: {pull_out}"
+                )
+        except Exception:
+            pass  # systemd not available — fall back to in-process restart
+
+        # Fall back: signal the main loop to restart (works in --watch / CLI mode)
+        logger.info("Systemd restart unavailable — requesting in-process restart")
+        _os.environ["_ATLAS_RESTART"] = "1"
+        _os.kill(_os.getpid(), _signal.SIGTERM)
+        return f"✅ Atlas updated — restarting now.\n\ngit pull: {pull_out}"
+
+    return BrainTool(
+        name="update_self",
+        description=(
+            "Update Atlas to the latest version from GitHub. "
+            "Pulls new code, reinstalls dependencies, and restarts the service. "
+            "Always confirm with the user before calling this tool."
+        ),
+        parameters={"type": "object", "properties": {}},
+        func=update_self,
+    )
+
+
 def _make_manage_skills(skills: SkillRegistry) -> BrainTool:
     def manage_skills(
         action: str, name: str = "", skill_md: str = "", tool_py: str = ""

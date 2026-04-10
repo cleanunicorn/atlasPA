@@ -350,7 +350,7 @@ async def test_awareness_failure_doesnt_crash(tmp_memory, empty_skills, tmp_path
 async def test_heartbeat_wrapper_starts_both_components(
     tmp_memory, empty_skills, tmp_path
 ):
-    """Heartbeat facade starts both Scheduler and Awareness."""
+    """Heartbeat facade starts Scheduler, Awareness, and Updater."""
     from heartbeat import Heartbeat
 
     brain, _ = make_brain([], tmp_memory, empty_skills)
@@ -360,4 +360,159 @@ async def test_heartbeat_wrapper_starts_both_components(
         await hb.start()
         assert hb._scheduler._scheduler.running
         assert hb._awareness._scheduler.running
+        assert hb._updater._scheduler.running
         await hb.stop()
+
+
+# ── Updater ───────────────────────────────────────────────────────────────────
+
+
+def test_check_for_update_no_upstream(monkeypatch):
+    """Returns (False, ...) when no upstream branch is configured."""
+    from heartbeat.updater import check_for_update
+
+    def fake_run(*args, **kwargs):
+        cmd = args[0]
+        if "fetch" in cmd:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if "rev-parse" in cmd and "HEAD" == cmd[-1]:
+            return MagicMock(returncode=0, stdout="abc123\n", stderr="")
+        if "rev-parse" in cmd and "@{u}" in cmd[-1]:
+            return MagicMock(returncode=128, stdout="", stderr="fatal: no upstream")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    available, msg = check_for_update()
+    assert not available
+    assert "upstream" in msg.lower() or "configured" in msg.lower()
+
+
+def test_check_for_update_already_up_to_date(monkeypatch):
+    """Returns (False, 'Already up to date') when local == remote HEAD."""
+    from heartbeat.updater import check_for_update
+
+    def fake_run(*args, **kwargs):
+        cmd = args[0]
+        if "fetch" in cmd:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        # Both rev-parse calls return the same hash
+        return MagicMock(returncode=0, stdout="abc123\n", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    available, msg = check_for_update()
+    assert not available
+    assert "up to date" in msg.lower()
+
+
+def test_check_for_update_new_commits(monkeypatch):
+    """Returns (True, ...) when the remote is ahead of local HEAD."""
+    from heartbeat.updater import check_for_update
+
+    call_count = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        cmd = args[0]
+        if "fetch" in cmd:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if "rev-parse" in cmd and cmd[-1] == "HEAD":
+            return MagicMock(returncode=0, stdout="aaaa\n", stderr="")
+        if "rev-parse" in cmd and "@{u}" in cmd[-1]:
+            return MagicMock(returncode=0, stdout="bbbb\n", stderr="")
+        if "log" in cmd:
+            return MagicMock(
+                returncode=0,
+                stdout="bbbb feat: add new feature\ncccc fix: some bug\n",
+                stderr="",
+            )
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    available, msg = check_for_update()
+    assert available
+    assert "2 new commit" in msg
+
+
+@pytest.mark.asyncio
+async def test_updater_notifies_on_new_commits(monkeypatch):
+    """Updater._check() calls notify_callback when an update is available."""
+    from heartbeat.updater import Updater
+
+    notified = []
+
+    async def mock_notify(text, files):
+        notified.append(text)
+
+    updater = Updater(notify_callback=mock_notify)
+
+    # Patch check_for_update to report an update
+    monkeypatch.setattr(
+        "heartbeat.updater.check_for_update",
+        lambda: (True, "1 new commit:\n  • feat: shiny thing"),
+    )
+    # Patch _run_git to return a stable remote HEAD
+    monkeypatch.setattr(
+        "heartbeat.updater._run_git",
+        lambda *a, **kw: (0, "bbbb"),
+    )
+
+    await updater._check()
+
+    assert len(notified) == 1
+    assert "update available" in notified[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_updater_no_duplicate_notification(monkeypatch):
+    """Updater._check() does NOT re-notify for the same remote HEAD."""
+    from heartbeat.updater import Updater
+
+    notified = []
+
+    async def mock_notify(text, files):
+        notified.append(text)
+
+    updater = Updater(notify_callback=mock_notify)
+    updater._last_reported_remote = "bbbb"  # already reported
+
+    monkeypatch.setattr(
+        "heartbeat.updater.check_for_update",
+        lambda: (True, "1 new commit:\n  • feat: same one"),
+    )
+    monkeypatch.setattr(
+        "heartbeat.updater._run_git",
+        lambda *a, **kw: (0, "bbbb"),
+    )
+
+    await updater._check()
+
+    assert len(notified) == 0  # no duplicate
+
+
+@pytest.mark.asyncio
+async def test_update_self_tool_no_update(tmp_memory, empty_skills):
+    """update_self returns a 'no update' message when already up to date."""
+    from providers.base import LLMResponse, ToolCall
+
+    mock_heartbeat = MagicMock()
+    mock_heartbeat.check_for_update = AsyncMock(
+        return_value=(False, "Already up to date")
+    )
+
+    brain, _ = make_brain(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCall(id="tc1", name="update_self", arguments={})],
+                stop_reason="tool_use",
+            ),
+            LLMResponse(content="No update needed.", tool_calls=[]),
+        ],
+        tmp_memory,
+        empty_skills,
+    )
+    brain.heartbeat = mock_heartbeat
+
+    _, history = await brain.think("Update yourself", conversation_history=[])
+
+    tool_result = next(m for m in history if m.role == "tool")
+    assert "no update available" in tool_result.content.lower()
