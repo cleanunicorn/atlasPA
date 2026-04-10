@@ -6,6 +6,7 @@ stdout + stderr are captured and returned as a string.
 """
 
 import asyncio
+import subprocess
 import sys
 
 PARAMETERS = {
@@ -42,27 +43,29 @@ async def run(code: str, timeout: int = 15, **kwargs) -> str:
     timeout = min(int(timeout), MAX_TIMEOUT)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-c",
-            code,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,  # No interactive prompts
-        )
+        def _run_sync():
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    timeout=timeout,
+                )
+                return result.stdout, result.returncode, False
+            except subprocess.TimeoutExpired as exc:
+                return (exc.output or b""), None, True
 
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+        raw_stdout, returncode, timed_out = await asyncio.to_thread(_run_sync)
+
+        if timed_out:
             return f"Error: code timed out after {timeout}s"
 
-        output = stdout.decode(errors="replace").rstrip()
+        output = raw_stdout.decode(errors="replace").rstrip()
 
         if not output:
-            output = f"(no output, exit code {proc.returncode})"
-        elif proc.returncode != 0:
+            output = f"(no output, exit code {returncode})"
+        elif returncode != 0:
             # Errors are useful — don't suppress them
             pass  # Output already contains the traceback from stderr
 
