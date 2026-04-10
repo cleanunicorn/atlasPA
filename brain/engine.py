@@ -234,10 +234,10 @@ class Brain:
                 json_mode=True,
             )
             raw = (response.content or "").strip()
-            # Strip markdown fences that some providers wrap JSON in
-            if raw.startswith("```"):
-                raw = re.sub(r"^```[a-z]*\n?", "", raw)
-                raw = re.sub(r"\n?```$", "", raw)
+            # Extract JSON from markdown fences, even when surrounded by text
+            fence_match = re.search(r"```[a-z]*\n?(.*?)\n?```", raw, re.DOTALL)
+            if fence_match:
+                raw = fence_match.group(1).strip()
             logger.debug(f"Tool selector raw response: {raw}")
             data = _json.loads(raw)
             selected = data.get("tools", [])
