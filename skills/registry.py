@@ -128,11 +128,7 @@ class SkillRegistry:
 
             description = f"Skill: {skill_dir.name}"
             if skill_md.exists():
-                for line in skill_md.read_text().splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        description = line[:200]
-                        break
+                description = skill_md.read_text().strip()
 
             # Addon skills with the same name as a core skill are skipped
             name = skill_dir.name
