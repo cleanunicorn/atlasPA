@@ -14,6 +14,7 @@ from collections.abc import Callable, Awaitable
 
 import dspy
 from brain.dspy_adapter import AtlasLM, brain_tool_to_dspy, AtlasSignature
+from brain.compactor import maybe_compact_history, estimate_tokens
 from providers.base import BaseLLMProvider, Message
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
@@ -342,6 +343,13 @@ class Brain:
         )
         if system_suffix:
             system_prompt += "\n\n---\n" + system_suffix
+
+        conversation_history, _ = await maybe_compact_history(
+            conversation_history,
+            self.provider,
+            system_prompt_tokens=estimate_tokens(system_prompt),
+            query_tokens=estimate_tokens(query_text),
+        )
 
         history_str = ""
         for m in conversation_history:

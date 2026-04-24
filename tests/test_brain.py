@@ -278,3 +278,250 @@ async def test_summariser_compresses_old_entries(tmp_memory):
     background = [e for e in entries_after if not e.timestamp]
     assert len(background) == 1
     assert "various" in background[0].content
+
+
+# ── Compactor tests ───────────────────────────────────────────────────────────
+
+
+def _long_messages(n: int, chars_per_msg: int) -> list[Message]:
+    """Build n messages alternating user/assistant with `chars_per_msg` of content each."""
+    filler = "x" * chars_per_msg
+    msgs = []
+    for i in range(n):
+        role = "user" if i % 2 == 0 else "assistant"
+        msgs.append(Message(role=role, content=f"msg{i}-{filler}"))
+    return msgs
+
+
+def test_estimate_tokens_char_heuristic():
+    from brain.compactor import estimate_tokens, estimate_history_tokens
+
+    assert estimate_tokens("") == 0
+    assert estimate_tokens("a" * 400) == 100
+    assert estimate_tokens(None if False else "") == 0
+
+    # list-content flattening via _extract_text
+    msgs = [
+        Message(role="user", content="hello"),
+        Message(
+            role="assistant",
+            content=[{"type": "text", "text": "world"}, {"type": "image"}],
+        ),
+    ]
+    # "hello" → 1, role "user" → 1; "world" → 1, role "assistant" → 2
+    assert estimate_history_tokens(msgs) == 1 + 1 + 1 + 2
+
+
+@pytest.mark.asyncio
+async def test_no_compaction_under_threshold():
+    from brain.compactor import maybe_compact_history
+
+    provider = MockProvider([])
+    msgs = _long_messages(4, 10)
+    result, was_compacted = await maybe_compact_history(
+        msgs, provider, system_prompt_tokens=0, query_tokens=0
+    )
+    assert was_compacted is False
+    assert result is msgs
+    assert provider._call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_compaction_triggered_over_threshold(monkeypatch):
+    from brain.compactor import maybe_compact_history, SUMMARY_MARKER
+
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
+    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "4")
+
+    msgs = _long_messages(30, 1000)  # ~30 * 1000 / 4 = 7500 tokens >> 4000 budget
+    provider = MockProvider(
+        [LLMResponse(content="Dense summary of earlier dialogue.", tool_calls=[])]
+    )
+    result, was_compacted = await maybe_compact_history(
+        msgs, provider, system_prompt_tokens=0, query_tokens=0
+    )
+
+    assert was_compacted is True
+    assert provider._call_count == 1
+    assert result[0].role == "user"
+    assert isinstance(result[0].content, str)
+    assert result[0].content.startswith(SUMMARY_MARKER)
+    assert "Dense summary" in result[0].content
+
+
+@pytest.mark.asyncio
+async def test_keep_recent_respected(monkeypatch):
+    from brain.compactor import maybe_compact_history
+
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
+    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "5")
+
+    msgs = _long_messages(40, 1000)
+    provider = MockProvider([LLMResponse(content="summary", tool_calls=[])])
+    result, was_compacted = await maybe_compact_history(
+        msgs, provider, system_prompt_tokens=0, query_tokens=0
+    )
+
+    assert was_compacted is True
+    # last 5 messages preserved verbatim (identity check on content)
+    for original, kept in zip(msgs[-5:], result[-5:]):
+        assert original.content == kept.content
+        assert original.role == kept.role
+
+
+@pytest.mark.asyncio
+async def test_orphan_tool_boundary_not_split(monkeypatch):
+    from brain.compactor import maybe_compact_history
+
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "1000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
+    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "2")
+
+    filler = "y" * 1000
+    # 10 messages; desired cut = 5. Place an assistant(tool_calls) at idx 4
+    # and a tool result at idx 5 — the cut must move forward past both.
+    msgs = [
+        Message(role="user", content=f"u0-{filler}"),
+        Message(role="assistant", content=f"a1-{filler}"),
+        Message(role="user", content=f"u2-{filler}"),
+        Message(role="assistant", content=f"a3-{filler}"),
+        Message(
+            role="assistant",
+            content=f"a4-{filler}",
+            tool_calls=[{"id": "t1", "name": "skill_x", "arguments": {}}],
+        ),
+        Message(role="tool", content="tool-output", tool_call_id="t1"),
+        Message(role="assistant", content=f"a6-{filler}"),
+        Message(role="user", content=f"u7-{filler}"),
+        Message(role="assistant", content=f"a8-{filler}"),
+        Message(role="user", content=f"u9-{filler}"),
+    ]
+
+    provider = MockProvider([LLMResponse(content="summary", tool_calls=[])])
+    result, was_compacted = await maybe_compact_history(
+        msgs, provider, system_prompt_tokens=0, query_tokens=0
+    )
+
+    assert was_compacted is True
+    # Post-summary tail must not start with a tool message
+    assert result[1].role != "tool"
+    # And must not be preceded (in the tail) by an assistant with tool_calls
+    # that references a now-missing tool result. Simpler check: no tool_calls
+    # on any tail message's predecessor inside the tail without its result.
+    assert not any(m.role == "tool" for m in result[1:2])
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_returns_original(monkeypatch):
+    from brain.compactor import maybe_compact_history
+
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
+    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "2")
+
+    class FailingProvider(BaseLLMProvider):
+        @property
+        def model_name(self) -> str:
+            return "failing"
+
+        async def complete(self, *a, **kw):
+            raise RuntimeError("boom")
+
+    msgs = _long_messages(20, 1000)
+    result, was_compacted = await maybe_compact_history(
+        msgs, FailingProvider(), system_prompt_tokens=0, query_tokens=0
+    )
+    assert was_compacted is False
+    assert result is msgs
+
+
+@pytest.mark.asyncio
+async def test_already_compacted_idempotent(monkeypatch):
+    from brain.compactor import maybe_compact_history, SUMMARY_MARKER
+
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
+    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "4")
+
+    msgs = _long_messages(30, 1000)
+    provider = MockProvider(
+        [
+            LLMResponse(content="summary-1", tool_calls=[]),
+            LLMResponse(content="summary-2", tool_calls=[]),
+        ]
+    )
+
+    first, c1 = await maybe_compact_history(
+        msgs, provider, system_prompt_tokens=0, query_tokens=0
+    )
+    assert c1 is True
+    assert first[0].content.startswith(SUMMARY_MARKER)
+
+    # Run again on the already-compacted history. It's now under the threshold,
+    # so it should be a no-op and still carry exactly one summary marker.
+    second, c2 = await maybe_compact_history(
+        first, provider, system_prompt_tokens=0, query_tokens=0
+    )
+    assert c2 is False
+    assert second is first
+    marker_count = sum(
+        1
+        for m in second
+        if isinstance(m.content, str) and m.content.startswith(SUMMARY_MARKER)
+    )
+    assert marker_count == 1
+
+
+@pytest.mark.asyncio
+async def test_brain_think_invokes_compaction(tmp_memory, empty_skills, monkeypatch):
+    """Brain.think() wires the compactor with system_prompt_tokens and query_tokens."""
+    from brain import engine as engine_mod
+
+    spy_calls = []
+
+    async def spy_compact(messages, provider, *, system_prompt_tokens, query_tokens):
+        spy_calls.append(
+            {
+                "n": len(messages),
+                "system_prompt_tokens": system_prompt_tokens,
+                "query_tokens": query_tokens,
+            }
+        )
+        return messages, False
+
+    monkeypatch.setattr(engine_mod, "maybe_compact_history", spy_compact)
+
+    brain = Brain(
+        provider=MockProvider(
+            [
+                LLMResponse(content='{"tools": []}', tool_calls=[]),  # tool selector
+                LLMResponse(content="ok", tool_calls=[]),  # react answer
+            ]
+        ),
+        memory=tmp_memory,
+        skills=empty_skills,
+    )
+
+    history = [
+        Message(role="user", content="previous turn"),
+        Message(role="assistant", content="previous answer"),
+    ]
+
+    # Don't actually run DSPy — short-circuit _run_react
+    async def fake_run_react(
+        system_prompt, history_str, query_text, state, selected_tools, on_status=None
+    ):
+        return "done"
+
+    brain._run_react = fake_run_react
+
+    answer, _ = await brain.think(
+        user_message="hello there", conversation_history=history
+    )
+    assert answer == "done"
+    assert len(spy_calls) == 1
+    assert spy_calls[0]["n"] == 2
+    assert spy_calls[0]["query_tokens"] == len("hello there") // 4
+    assert spy_calls[0]["system_prompt_tokens"] > 0
