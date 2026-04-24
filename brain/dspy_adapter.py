@@ -158,11 +158,3 @@ class AtlasSignature(dspy.Signature):
     history = dspy.InputField(desc="Recent conversation history.")
     question = dspy.InputField(desc="The user's current request or message.")
     answer = dspy.OutputField(desc="A helpful, concise response to the user.")
-
-class ToolSelectionSignature(dspy.Signature):
-    """
-    Pick relevant tools and skills for a query.
-    """
-    request = dspy.InputField(desc="The user's request.")
-    catalog = dspy.InputField(desc="A list of available tools and their descriptions.")
-    tools = dspy.OutputField(desc="A list of tool names that are relevant to fulfilling the request.")
