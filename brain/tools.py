@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from providers.base import ToolDefinition
+from providers.base import ToolDefinition, BaseLLMProvider
 from memory.store import MemoryStore
+from memory.summariser import maybe_summarise
 from skills.registry import SkillRegistry, Skill
 
 logger = logging.getLogger(__name__)
@@ -30,20 +31,17 @@ _DEFAULT_SCHEMA = {
 }
 
 
-# ── BrainTool ───────────────────────────────────────────────────────────────
-
-
 @dataclass
 class BrainTool:
-    """A tool the Brain can execute: metadata + callable."""
+    """A tool that can be called by the Brain reasoning loop."""
 
     name: str
     description: str
-    parameters: dict  # Full JSON Schema {"type": "object", "properties": ...}
+    parameters: dict
     func: Callable
 
-    def __call__(self, **kwargs):
-        return self.func(**kwargs)
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
 
     @property
     def args(self):
@@ -81,41 +79,35 @@ def _run_skill_sync(skill: Skill, kwargs: dict):
     If the skill is async, returns the coroutine so the caller
     (_execute_tool) can await it — avoids nesting event loops.
     """
-    result = skill._module.run(**kwargs)
-    if inspect.iscoroutine(result):
-        return result
-    return str(result)
+    return skill.run(**kwargs)
 
 
-# ── Schema builder ──────────────────────────────────────────────────────────
-
-
-_TYPE_MAP = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-}
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _func_schema(func: Callable) -> dict:
-    """Build a JSON Schema from a function's type-annotated signature."""
+    """Build a JSON Schema for a function's parameters via inspection."""
     sig = inspect.signature(func)
-    properties = {}
+    props = {}
     required = []
 
     for name, param in sig.parameters.items():
-        ann = param.annotation
-        json_type = _TYPE_MAP.get(ann, "string")
-        properties[name] = {"type": json_type}
+        if name in ("self", "cls"):
+            continue
+
+        p_type = "string"
+        if param.annotation is int:
+            p_type = "integer"
+        elif param.annotation is bool:
+            p_type = "boolean"
+        elif param.annotation is list:
+            p_type = "array"
+
+        props[name] = {"type": p_type}
         if param.default is inspect.Parameter.empty:
             required.append(name)
 
-    schema: dict = {"type": "object", "properties": properties}
-    if required:
-        schema["required"] = required
-    return schema
+    return {"type": "object", "properties": props, "required": required}
 
 
 def _tool(func: Callable, name: str | None = None) -> BrainTool:
@@ -138,23 +130,19 @@ def _make_skill_tool(skill: Skill) -> BrainTool:
         if skill._module
         else _DEFAULT_SCHEMA
     )
-    props = schema.get("properties", {"input": {"type": "string"}})
 
     captured = skill
 
-    def wrapper(**kwargs) -> str:
-        return _run_skill_sync(captured, kwargs)
+    async def wrapper(**kwargs):
+        # Skills are normally sync; run in thread to avoid blocking loop
+        import asyncio
 
-    wrapper.__name__ = f"skill_{skill.name}"
+        return await asyncio.to_thread(_run_skill_sync, captured, kwargs)
 
     return BrainTool(
         name=f"skill_{skill.name}",
         description=skill.description,
-        parameters={
-            "type": "object",
-            "properties": props,
-            "required": schema.get("required", []),
-        },
+        parameters=schema,
         func=wrapper,
     )
 
@@ -162,11 +150,13 @@ def _make_skill_tool(skill: Skill) -> BrainTool:
 # ── Built-in tool factories ─────────────────────────────────────────────────
 
 
-def _make_remember(memory: MemoryStore) -> BrainTool:
-    def remember(note: str) -> str:
+def _make_remember(memory: MemoryStore, provider: BaseLLMProvider) -> BrainTool:
+    async def remember(note: str) -> str:
         """Save an important fact or note about the user to long-term memory. Use this when you learn something about the user worth remembering across sessions."""
         memory.append_context(note)
         logger.info(f"Remembered: {note[:80]}")
+        # Run summarization check
+        await maybe_summarise(memory, provider)
         return f"✅ Remembered: {note}"
 
     return _tool(remember)
@@ -183,7 +173,7 @@ def _make_forget(memory: MemoryStore) -> BrainTool:
 
 
 def _make_set_location(memory: MemoryStore) -> BrainTool:
-    def set_location(location: str, timezone: str) -> str:
+    def set_location(location: str, timezone: str = "") -> str:
         """Update the user's current location and timezone. Pass empty strings to reset to home."""
         memory.set_current_location(location, timezone)
         if location:
