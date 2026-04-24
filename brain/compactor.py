@@ -6,8 +6,8 @@ Token-aware conversation history compaction.
 When `system_prompt + conversation_history + query` is estimated to exceed
 CONTEXT_COMPACTION_THRESHOLD * CONTEXT_MAX_TOKENS, the oldest half of the
 history is LLM-summarised into one synthetic user message prefixed with
-SUMMARY_MARKER. The recent tail (at least CONTEXT_COMPACTION_KEEP_RECENT
-messages) is preserved verbatim. The cut never splits a tool-use/tool-result
+SUMMARY_MARKER. The recent tail (CONTEXT_COMPACTION_KEEP_RECENT messages)
+is preserved verbatim. The cut never splits a tool-use/tool-result
 pair. Best-effort: on provider failure the original list is returned.
 
 Mirrors the shape of memory/summariser.py but operates on conversation history
@@ -125,9 +125,6 @@ async def maybe_compact_history(
     keep_recent = int(
         os.getenv("CONTEXT_COMPACTION_KEEP_RECENT", str(DEFAULT_KEEP_RECENT))
     )
-
-    if len(messages) < keep_recent + 2:
-        return messages, False
 
     history_tokens = estimate_history_tokens(messages)
     total_tokens = system_prompt_tokens + query_tokens + history_tokens
