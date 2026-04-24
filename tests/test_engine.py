@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from providers.base import BaseLLMProvider, Message, LLMResponse
+import dspy
+from providers.base import BaseLLMProvider, Message, LLMResponse, ToolCall
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 from brain.engine import (
@@ -341,14 +342,12 @@ async def test_tool_call_and_response(tmp_memory, empty_skills):
 
 @pytest.mark.asyncio
 async def test_ask_user_stops_loop_and_returns_question(tmp_memory, empty_skills):
-    provider = MockProvider()
-    brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
-    _precache_tools(brain)
-
     async def mock_think_clarification(*args, **kwargs):
         return "What date?", []
 
     with patch.object(Brain, "think", side_effect=mock_think_clarification):
+        provider = MockProvider()
+        brain = Brain(provider=provider, memory=tmp_memory, skills=empty_skills)
         response, history = await brain.think("Schedule something", [])
         assert response == "What date?"
 
@@ -510,14 +509,14 @@ async def test_select_tools_calls_provider(tmp_memory, tmp_path):
     """_select_tools makes an LLM call and parses the JSON response."""
     with patch("brain.engine.TOOL_SELECTION_THRESHOLD", 1):
         skills = _make_multi_skill_registry(tmp_path, 2)
-        response_json = '{"tools": ["remember", "skill_skill_0"]}'
-        provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
-        brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+        with patch("dspy.Predict.aforward") as mock_pred:
+            mock_pred.return_value = MagicMock(tools=["remember", "skill_skill_0"])
+            provider = MockProvider()
+            brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-        result = await brain._select_tools("do something")
-        assert "remember" in result
-        assert "skill_skill_0" in result
-        assert provider._call_count == 1
+            result = await brain._select_tools("do something")
+            assert "remember" in result
+            assert "skill_skill_0" in result
 
 
 @pytest.mark.asyncio
@@ -525,25 +524,13 @@ async def test_select_tools_fallback_on_bad_json(tmp_memory, tmp_path):
     """_select_tools returns all tool names when provider returns garbage."""
     with patch("brain.engine.TOOL_SELECTION_THRESHOLD", 1):
         skills = _make_multi_skill_registry(tmp_path, 2)
-        provider = MockProvider([LLMResponse(content="not json at all", tool_calls=[])])
-        brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+        with patch("dspy.Predict.aforward", side_effect=Exception("fail")):
+            provider = MockProvider()
+            brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-        result = await brain._select_tools("query")
-        all_names, _ = brain._tool_catalog()
-        assert result == all_names
-
-
-@pytest.mark.asyncio
-async def test_select_tools_strips_markdown_fences(tmp_memory, tmp_path):
-    """_select_tools handles JSON wrapped in markdown code fences."""
-    with patch("brain.engine.TOOL_SELECTION_THRESHOLD", 1):
-        skills = _make_multi_skill_registry(tmp_path, 2)
-        fenced = '```json\n{"tools": ["skill_skill_1"]}\n```'
-        provider = MockProvider([LLMResponse(content=fenced, tool_calls=[])])
-        brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
-
-        result = await brain._select_tools("query")
-        assert result == ["skill_skill_1"]
+            result = await brain._select_tools("query")
+            all_names, _ = brain._tool_catalog()
+            assert result == all_names
 
 
 @pytest.mark.asyncio
@@ -551,12 +538,13 @@ async def test_select_tools_filters_invalid_names(tmp_memory, tmp_path):
     """_select_tools drops tool names that don't exist."""
     with patch("brain.engine.TOOL_SELECTION_THRESHOLD", 1):
         skills = _make_multi_skill_registry(tmp_path, 2)
-        response_json = '{"tools": ["remember", "nonexistent_tool"]}'
-        provider = MockProvider([LLMResponse(content=response_json, tool_calls=[])])
-        brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
+        with patch("dspy.Predict.aforward") as mock_pred:
+            mock_pred.return_value = MagicMock(tools=["remember", "nonexistent_tool"])
+            provider = MockProvider()
+            brain = Brain(provider=provider, memory=tmp_memory, skills=skills)
 
-        result = await brain._select_tools("query")
-        assert result == ["remember"]
+            result = await brain._select_tools("query")
+            assert result == ["remember"]
 
 
 def test_build_tools_filters_all(tmp_memory, tmp_path):
@@ -607,7 +595,6 @@ def test_request_skills_tool_validates_names(tmp_path, tmp_memory):
 @pytest.mark.asyncio
 async def test_save_trace_creates_file(brain, tmp_path):
     """Brain._save_trace creates a trace file in TRACE_DIR."""
-    # Mock history on AtlasLM
     brain.lm.history = [{"prompt": "test", "response": "test"}]
 
     with patch("brain.engine.TRACE_DIR", tmp_path):

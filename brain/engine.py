@@ -8,12 +8,13 @@ import json as _json
 import logging
 import os
 import re
+import asyncio
 import datetime
 from pathlib import Path
 from collections.abc import Callable, Awaitable
 
 import dspy
-from brain.dspy_adapter import AtlasLM, brain_tool_to_dspy, AtlasSignature
+from brain.dspy_adapter import AtlasLM, brain_tool_to_dspy, AtlasSignature, ToolSelectionSignature
 from providers.base import BaseLLMProvider, Message
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 30
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-TOOL_SELECTION_THRESHOLD = 30
+TOOL_SELECTION_THRESHOLD = 5
 TRACE_DIR = Path("logs/traces")
 
 # Tools that are always available regardless of selection
@@ -174,11 +175,7 @@ class Brain:
         return all_names, "\n".join(lines)
 
     async def _select_tools(self, query_text: str) -> list[str]:
-        """Pick relevant tools and skills for a query via a lightweight LLM call.
-
-        Returns a list of tool names to include. Always returns a concrete list.
-        Tools in _ALWAYS_INCLUDED_TOOLS are added automatically by _build_tools.
-        """
+        """Pick relevant tools and skills for a query using DSPy."""
         all_names, catalog = self._tool_catalog()
         if not all_names:
             return []
@@ -189,44 +186,26 @@ class Brain:
             )
             return all_names
 
-        system = (
-            "You are a tool router. Given the user's request and a list of "
-            "available tools, return a JSON object with a single key \"tools\" "
-            "containing an array of tool names that are relevant to fulfilling "
-            "the request. Include only tools that are directly useful. "
-            "If none are relevant, return an empty array."
-        )
-        user_content = (
-            f"User request: {query_text}\n\n"
-            f"Available tools:\n{catalog}"
-        )
-
         try:
-            response = await self.provider.complete(
-                messages=[Message(role="user", content=user_content)],
-                system=system,
-                max_tokens=2048,
-                json_mode=True,
-            )
-            raw = (response.content or "").strip()
-            # Extract JSON from markdown fences, even when surrounded by text
-            fence_match = re.search(r"```[a-z]*\n?(.*?)\n?```", raw, re.DOTALL)
-            if fence_match:
-                raw = fence_match.group(1).strip()
-            logger.debug(f"Tool selector raw response: {raw}")
-            data = _json.loads(raw)
-            selected = data.get("tools", [])
+            predictor = dspy.Predict(ToolSelectionSignature)
+            # Use JSONAdapter for structured output of tools list
+            with dspy.settings.context(lm=self.lm, adapter=dspy.JSONAdapter()):
+                result = await predictor.aforward(request=query_text, catalog=catalog)
+                selected = result.tools
+
             if not isinstance(selected, list):
-                raise ValueError(f"Expected list, got {type(selected)}")
-            # Validate against actual tool names
+                # Fallback if LM returns string representation of list
+                if isinstance(selected, str):
+                    try:
+                        selected = _json.loads(selected)
+                    except Exception:
+                        selected = []
+                else:
+                    selected = []
+
             valid = set(all_names)
             filtered = [s for s in selected if s in valid]
-            dropped = [s for s in selected if s not in valid]
-            if dropped:
-                logger.warning(f"Tool selector returned unknown tools: {dropped}")
-            logger.info(
-                f"Tool selector chose {len(filtered)}/{len(all_names)}: {filtered}"
-            )
+            logger.info(f"Tool selector chose {len(filtered)}/{len(all_names)}: {filtered}")
             return filtered
         except Exception as e:
             logger.warning(f"Tool selection failed, using all tools: {e}")
@@ -264,13 +243,15 @@ class Brain:
         """
         trajectory = []
 
-        for i in range(MAX_ITERATIONS):
+        for _ in range(MAX_ITERATIONS):
             tools = self._build_tools(state, selected_tools)
             dspy_tools = [brain_tool_to_dspy(t, on_status) for t in tools]
 
             with dspy.settings.context(lm=self.lm, adapter=dspy.ChatAdapter()):
                 react = dspy.ReAct(AtlasSignature, tools=dspy_tools, max_iters=MAX_ITERATIONS)
 
+                # To preserve trajectory, we'd ideally pass it to ReAct.
+                # Since dspy.ReAct doesn't expose it, we simulate it by updating the 'history' field.
                 combined_history = history_str
                 if trajectory:
                     combined_history += "\n--- PREVIOUS STEPS ---\n" + "\n".join(trajectory)
