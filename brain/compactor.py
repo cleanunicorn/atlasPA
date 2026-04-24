@@ -6,9 +6,8 @@ Token-aware conversation history compaction.
 When `system_prompt + conversation_history + query` is estimated to exceed
 CONTEXT_COMPACTION_THRESHOLD * CONTEXT_MAX_TOKENS, the oldest half of the
 history is LLM-summarised into one synthetic user message prefixed with
-SUMMARY_MARKER. The recent tail (CONTEXT_COMPACTION_KEEP_RECENT messages)
-is preserved verbatim. The cut never splits a tool-use/tool-result
-pair. Best-effort: on provider failure the original list is returned.
+SUMMARY_MARKER. The cut never splits a tool-use/tool-result pair.
+Best-effort: on provider failure the original list is returned.
 
 Mirrors the shape of memory/summariser.py but operates on conversation history
 instead of long-term context entries.
@@ -23,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT_MAX_TOKENS = 200_000
 DEFAULT_COMPACTION_THRESHOLD = 0.8
-DEFAULT_KEEP_RECENT = 10
 SUMMARY_MARKER = "[Conversation summary of earlier messages]"
 
 
@@ -66,9 +64,7 @@ def _is_already_compacted(messages: list[Message]) -> bool:
     return text.startswith(SUMMARY_MARKER)
 
 
-def _find_safe_cut(
-    messages: list[Message], desired_cut: int, keep_recent: int
-) -> int:
+def _find_safe_cut(messages: list[Message], desired_cut: int) -> int:
     """Expand cut forward past any tool-use/tool-result boundary.
 
     Ensures the post-summary tail does not start with a `role="tool"` message
@@ -77,7 +73,7 @@ def _find_safe_cut(
     after compaction.
     """
     cut = desired_cut
-    upper = len(messages) - keep_recent
+    upper = len(messages)
     while cut < upper:
         if messages[cut].role == "tool":
             cut += 1
@@ -116,14 +112,10 @@ async def maybe_compact_history(
     Env vars (read fresh on each call so tests can override):
         CONTEXT_MAX_TOKENS            — default 200000
         CONTEXT_COMPACTION_THRESHOLD  — default 0.8
-        CONTEXT_COMPACTION_KEEP_RECENT — default 10
     """
     context_max = int(os.getenv("CONTEXT_MAX_TOKENS", str(DEFAULT_CONTEXT_MAX_TOKENS)))
     threshold = float(
         os.getenv("CONTEXT_COMPACTION_THRESHOLD", str(DEFAULT_COMPACTION_THRESHOLD))
-    )
-    keep_recent = int(
-        os.getenv("CONTEXT_COMPACTION_KEEP_RECENT", str(DEFAULT_KEEP_RECENT))
     )
 
     history_tokens = estimate_history_tokens(messages)
@@ -133,7 +125,7 @@ async def maybe_compact_history(
         return messages, False
 
     desired_cut = len(messages) // 2
-    cut = _find_safe_cut(messages, desired_cut, keep_recent)
+    cut = _find_safe_cut(messages, desired_cut)
     if cut <= 0:
         return messages, False
 

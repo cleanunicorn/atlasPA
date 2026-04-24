@@ -332,7 +332,6 @@ async def test_compaction_triggered_over_threshold(monkeypatch):
 
     monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
     monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
-    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "4")
 
     msgs = _long_messages(30, 1000)  # ~30 * 1000 / 4 = 7500 tokens >> 4000 budget
     provider = MockProvider(
@@ -351,33 +350,11 @@ async def test_compaction_triggered_over_threshold(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_keep_recent_respected(monkeypatch):
-    from brain.compactor import maybe_compact_history
-
-    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
-    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
-    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "5")
-
-    msgs = _long_messages(40, 1000)
-    provider = MockProvider([LLMResponse(content="summary", tool_calls=[])])
-    result, was_compacted = await maybe_compact_history(
-        msgs, provider, system_prompt_tokens=0, query_tokens=0
-    )
-
-    assert was_compacted is True
-    # last 5 messages preserved verbatim (identity check on content)
-    for original, kept in zip(msgs[-5:], result[-5:]):
-        assert original.content == kept.content
-        assert original.role == kept.role
-
-
-@pytest.mark.asyncio
 async def test_orphan_tool_boundary_not_split(monkeypatch):
     from brain.compactor import maybe_compact_history
 
     monkeypatch.setenv("CONTEXT_MAX_TOKENS", "1000")
     monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
-    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "2")
 
     filler = "y" * 1000
     # 10 messages; desired cut = 5. Place an assistant(tool_calls) at idx 4
@@ -419,7 +396,6 @@ async def test_provider_failure_returns_original(monkeypatch):
 
     monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
     monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
-    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "2")
 
     class FailingProvider(BaseLLMProvider):
         @property
@@ -443,7 +419,6 @@ async def test_already_compacted_idempotent(monkeypatch):
 
     monkeypatch.setenv("CONTEXT_MAX_TOKENS", "5000")
     monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.8")
-    monkeypatch.setenv("CONTEXT_COMPACTION_KEEP_RECENT", "4")
 
     msgs = _long_messages(30, 1000)
     provider = MockProvider(
