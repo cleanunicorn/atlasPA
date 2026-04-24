@@ -1,35 +1,23 @@
 """
 brain/engine.py
 
-The Brain — implements a ReAct (Reason + Act) loop using the provider's
-native tool-calling API.
-
-No DSPy dependency.  The loop calls provider.complete() iteratively,
-executing tool calls until the model produces a final text response.
-
-Key design notes:
-  - Natively async — no thread bridging needed.
-  - Tools are BrainTool instances (brain/tools.py) converted to
-    ToolDefinition for the provider.
-  - Async skill run() functions are bridged with a fresh event loop
-    in a worker thread (via asyncio.to_thread).
-  - Built-in tools close over a per-turn _TurnState to propagate
-    side-effects (file queuing, clarifications, plan tracking).
+The Brain — implements a ReAct (Reason + Act) loop using DSPy.
 """
 
-import asyncio
 import json as _json
 import logging
 import os
 import re
+import datetime
 from pathlib import Path
 from collections.abc import Callable, Awaitable
 
-from providers.base import BaseLLMProvider, Message, ToolCall
+import dspy
+from brain.dspy_adapter import AtlasLM, brain_tool_to_dspy, AtlasSignature
+from providers.base import BaseLLMProvider, Message
 from memory.store import MemoryStore
 from skills.registry import SkillRegistry
 
-from brain.status import _tool_status_message
 from brain.tools import (  # noqa: F401 — re-exported for tests
     BrainTool,
     _TurnState,
@@ -56,7 +44,8 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 30
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-TOOL_SELECTION_THRESHOLD = 5
+TOOL_SELECTION_THRESHOLD = 30
+TRACE_DIR = Path("logs/traces")
 
 # Tools that are always available regardless of selection
 _ALWAYS_INCLUDED_TOOLS = frozenset({
@@ -95,35 +84,12 @@ def _extract_text(content: str | list) -> str:
     return " ".join(b.get("text", "") for b in content if b.get("type") == "text")
 
 
-# ── Helper: execute a tool call ─────────────────────────────────────────────
-
-
-async def _execute_tool(tool_map: dict[str, BrainTool], tc: ToolCall) -> str:
-    """Execute a tool call and return the result string."""
-    tool = tool_map.get(tc.name)
-    if tool is None:
-        return f"Error: unknown tool '{tc.name}'"
-
-    try:
-        result = tool.func(**tc.arguments)
-        # Handle async tool functions
-        if asyncio.iscoroutine(result):
-            result = await result
-        return str(result)
-    except Exception as e:
-        logger.warning(f"Tool {tc.name} raised: {e}")
-        return f"Error in {tc.name}: {e}"
-
-
 # ── Brain ────────────────────────────────────────────────────────────────────
 
 
 class Brain:
     """
-    ReAct reasoning engine using native tool calling.
-
-    Wraps provider.complete() with Atlas's skill registry, memory,
-    and built-in tools.  Public interface is identical to the previous engine.
+    ReAct reasoning engine using DSPy.
     """
 
     def __init__(
@@ -138,7 +104,13 @@ class Brain:
         self._session_tokens: dict[str, int] = {"input": 0, "output": 0}
         self._selected_tools: list[str] | None = None  # cached tool/skill selection
 
-        logger.info(f"Brain ready: {provider.model_name}")
+        # DSPy setup
+        self.lm = AtlasLM(provider)
+
+        if not TRACE_DIR.exists():
+            TRACE_DIR.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Brain ready (DSPy): {provider.model_name}")
 
     # ── Tool construction ────────────────────────────────────────────────────
 
@@ -208,6 +180,9 @@ class Brain:
         Tools in _ALWAYS_INCLUDED_TOOLS are added automatically by _build_tools.
         """
         all_names, catalog = self._tool_catalog()
+        if not all_names:
+            return []
+
         if len(all_names) < TOOL_SELECTION_THRESHOLD:
             logger.debug(
                 f"Skipping tool selection ({len(all_names)} < {TOOL_SELECTION_THRESHOLD})"
@@ -259,125 +234,79 @@ class Brain:
 
     # ── ReAct loop ──────────────────────────────────────────────────────────
 
-    async def _react_loop(
+    def _save_trace(self, lm: AtlasLM):
+        """Save DSPy LM history as a trace for future compilation."""
+        if not lm.history:
+            return
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        trace_file = TRACE_DIR / f"trace_{timestamp}.json"
+
+        try:
+            with open(trace_file, "w") as f:
+                _json.dump(lm.history, f, indent=2)
+            logger.debug(f"Saved DSPy trace to {trace_file}")
+        except Exception as e:
+            logger.warning(f"Could not save DSPy trace: {e}")
+
+    async def _run_react(
         self,
-        system: str,
-        messages: list[Message],
-        tools: list[BrainTool],
+        system_prompt: str,
+        history_str: str,
+        query_text: str,
         state: _TurnState,
+        selected_tools: list[str],
         on_status: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """
-        Run the ReAct loop: call LLM, execute tools, repeat until text response.
-
-        Returns the model's final text answer.
+        Run the ReAct loop using DSPy.
+        Supports hot-loading skills mid-loop while preserving trajectory.
         """
-        tool_map = {t.name: t for t in tools}
-        tool_defs = [t.to_definition() for t in tools]
+        trajectory = []
 
         for i in range(MAX_ITERATIONS):
-            if on_status:
-                try:
-                    await on_status("Thinking...")
-                except Exception:
-                    pass
+            tools = self._build_tools(state, selected_tools)
+            dspy_tools = [brain_tool_to_dspy(t, on_status) for t in tools]
 
-            response = await self.provider.complete(
-                messages=messages,
-                tools=tool_defs,
-                system=system,
-                max_tokens=MAX_TOKENS,
-            )
+            with dspy.settings.context(lm=self.lm, adapter=dspy.ChatAdapter()):
+                react = dspy.ReAct(AtlasSignature, tools=dspy_tools, max_iters=MAX_ITERATIONS)
 
-            # Track token usage
-            if response.usage:
-                self._session_tokens["input"] += response.usage.get("input_tokens", 0)
-                self._session_tokens["output"] += response.usage.get("output_tokens", 0)
+                combined_history = history_str
+                if trajectory:
+                    combined_history += "\n--- PREVIOUS STEPS ---\n" + "\n".join(trajectory)
 
-            # No tool calls → final answer
-            if not response.tool_calls:
-                if response.content:
-                    return response.content
-                # Model returned empty content; ask it to summarize
-                messages.append(
-                    Message(role="user", content="Summarize what you did.")
-                )
-                summary = await self.provider.complete(
-                    messages=messages, system=system, max_tokens=MAX_TOKENS,
-                )
-                return summary.content or "Done."
-
-            # Append assistant message with tool calls
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=response.content,
-                    tool_calls=[
-                        {
-                            "id": tc.id,
-                            "name": tc.name,
-                            "arguments": tc.arguments,
-                        }
-                        for tc in response.tool_calls
-                    ],
-                )
-            )
-
-            # Execute each tool call
-            for tc in response.tool_calls:
-                if on_status:
-                    status_msg = _tool_status_message(tc.name)
-                    if status_msg:
-                        try:
-                            await on_status(status_msg)
-                        except Exception:
-                            pass
-
-                result = await _execute_tool(tool_map, tc)
-
-                messages.append(
-                    Message(
-                        role="tool",
-                        content=result,
-                        tool_call_id=tc.id,
-                    )
+                prediction = await react.aforward(
+                    context=system_prompt,
+                    history=combined_history,
+                    question=query_text
                 )
 
-                # Early exit: ask_user or reload
-                if state.clarification or state.restart_requested:
-                    return response.content or ""
+            # ask_user stops the loop early
+            if state.clarification or state.restart_requested:
+                 self._save_trace(self.lm)
+                 return prediction.answer or ""
 
-            # Hot-load skills requested mid-loop via request_skills tool
+            # Check if skills were requested
             if state.requested_skills:
+                new_skills = []
                 for skill_name in state.requested_skills:
-                    if f"skill_{skill_name}" not in tool_map:
-                        skill = self.skills.get_skill(skill_name)
-                        if skill:
-                            try:
-                                new_tool = _make_skill_tool(skill)
-                                tool_map[new_tool.name] = new_tool
-                                # Persist to cached selection
-                                if new_tool.name not in self._selected_tools:
-                                    self._selected_tools.append(new_tool.name)
-                            except Exception as e:
-                                logger.warning(f"Could not load skill '{skill_name}': {e}")
+                    name = f"skill_{skill_name}"
+                    if name not in selected_tools:
+                        selected_tools.append(name)
+                        new_skills.append(skill_name)
                 state.requested_skills.clear()
-                tool_defs = [t.to_definition() for t in tool_map.values()]
-                logger.info(f"Tools updated mid-loop, now {len(tool_defs)} tools")
 
-            logger.debug(f"ReAct iteration {i + 1}/{MAX_ITERATIONS} complete")
+                if new_skills:
+                    logger.info(f"Hot-loading skills: {new_skills}. Re-running ReAct loop.")
+                    if hasattr(prediction, 'trajectory'):
+                         trajectory = prediction.trajectory
+                    continue
 
-        logger.warning("ReAct loop hit max iterations")
-        if response.content:
-            return response.content
-        # Model returned empty content; ask it to summarize
-        messages.append(
-            Message(role="user", content="Summarize what you did.")
-        )
-        summary = await self.provider.complete(
-            messages=messages, system=system, max_tokens=MAX_TOKENS,
-        )
-        return summary.content or "Done."
+            self._save_trace(self.lm)
+            return prediction.answer
+
+        self._save_trace(self.lm)
+        return "Loop limit reached."
 
     # ── Public interface ─────────────────────────────────────────────────────
 
@@ -390,9 +319,6 @@ class Brain:
     ) -> tuple[str, list[Message]]:
         """
         Run the ReAct loop for a single user message.
-
-        on_status receives human-readable progress strings ("Thinking...",
-        "Using web search...") while the loop runs.  Safe to ignore.
         """
         self._pending_files = []
         self._current_plan = None
@@ -408,40 +334,40 @@ class Brain:
             n for n in self._selected_tools
             if n.startswith("skill_")
         ]
-        # Strip the skill_ prefix for the registry lookup
         skill_names = [n[len("skill_"):] for n in selected_skill_names]
         filtered_summary = self.skills.get_skills_summary(only=skill_names)
-        system = await self.memory.build_system_prompt(
+
+        system_prompt = await self.memory.build_system_prompt(
             filtered_summary, query=query_text
         )
         if system_suffix:
-            system += "\n\n---\n" + system_suffix
+            system_prompt += "\n\n---\n" + system_suffix
+
+        history_str = ""
+        for m in conversation_history:
+            history_str += f"{m.role}: {m.content}\n"
+
+        try:
+            answer = await self._run_react(
+                system_prompt, history_str, query_text,
+                state, self._selected_tools, on_status
+            )
+        except Exception as e:
+            logger.error(f"DSPy ReAct failed: {e}")
+            answer = f"I encountered an error while thinking: {e}"
+
+        self._pending_files = state.pending_files
+        self._current_plan = state.current_plan
 
         messages = list(conversation_history) + [
             Message(role="user", content=user_message)
         ]
 
-        tools = self._build_tools(state, self._selected_tools)
-
-        tool_names = [t.name for t in tools]
-        logger.info(
-            f"ReAct starting ({len(tools)} tools: {tool_names}, "
-            f"max_iters={MAX_ITERATIONS})"
-        )
-
-        answer = await self._react_loop(system, messages, tools, state, on_status)
-
-        # Sync per-turn state back to Brain
-        self._pending_files = state.pending_files
-        self._current_plan = state.current_plan
-
-        # ask_user was called — surface the question and stop
         if state.clarification:
             messages.append(Message(role="assistant", content=state.clarification))
             logger.info("Returning clarification question to user.")
             return state.clarification, messages
 
-        # reload was called — signal the main process to restart cleanly
         if state.restart_requested:
             final_text = _clean_response(answer or "Restarting…")
             messages.append(Message(role="assistant", content=final_text))
@@ -465,24 +391,39 @@ class Brain:
 
     async def extract(self, text: str, schema: dict, instruction: str = "") -> dict:
         """
-        Extract structured data from text as JSON.
-
-        Bypasses the ReAct loop; calls the provider directly with json_mode=True.
+        Extract structured data from text using DSPy.
         """
-        system = (
-            "You are a data-extraction assistant. "
-            "Read the input and return ONLY a valid JSON object that matches this schema:\n"
-            f"{_json.dumps(schema, indent=2)}\n"
-            "No prose, no markdown fences — raw JSON only."
-        )
-        content = f"{instruction}\n\n{text}".strip() if instruction else text
-        response = await self.provider.complete(
-            messages=[Message(role="user", content=content)],
-            system=system,
-            max_tokens=MAX_TOKENS,
-            json_mode=True,
-        )
-        raw = (response.content or "").strip()
+        class ExtractionSignature(dspy.Signature):
+            """Extract structured data."""
+            text = dspy.InputField()
+            instruction = dspy.InputField()
+            output = dspy.OutputField(desc="JSON data matching requested schema")
+
+        try:
+            with dspy.settings.context(lm=self.lm, adapter=dspy.JSONAdapter()):
+                predictor = dspy.Predict(ExtractionSignature)
+                full_instruction = f"{instruction}\n\nReturn ONLY a valid JSON object matching this schema: {_json.dumps(schema)}"
+                result = await predictor.aforward(text=text, instruction=full_instruction)
+                raw = result.output
+                self._save_trace(self.lm)
+        except Exception as e:
+            logger.warning(f"DSPy extraction failed, falling back: {e}")
+            system = (
+                "You are a data-extraction assistant. "
+                "Read the input and return ONLY a valid JSON object that matches this schema:\n"
+                f"{_json.dumps(schema, indent=2)}\n"
+                "No prose, no markdown fences — raw JSON only."
+            )
+            content = f"{instruction}\n\n{text}".strip() if instruction else text
+            response = await self.provider.complete(
+                messages=[Message(role="user", content=content)],
+                system=system,
+                max_tokens=MAX_TOKENS,
+                json_mode=True,
+            )
+            raw = response.content or ""
+
+        raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
