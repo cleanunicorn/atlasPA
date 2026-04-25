@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # ReAct parameters
 MAX_ITERATIONS = 8
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 TRACE_DIR = Path("logs/traces")
 TRACE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -151,7 +152,7 @@ class Brain:
             response = await self.provider.complete(
                 messages=[Message(role="user", content=user_content)],
                 system=system,
-                max_tokens=2048,
+                max_tokens=MAX_TOKENS,
                 json_mode=True,
             )
             raw = (response.content or "").strip()
@@ -373,7 +374,7 @@ class Brain:
             response = await self.provider.complete(
                 messages=[Message(role="user", content=content)],
                 system=system,
-                max_tokens=4096,
+                max_tokens=MAX_TOKENS,
                 json_mode=True,
             )
             raw = response.content or ""
