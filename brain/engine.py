@@ -34,6 +34,7 @@ from brain.tools import (
     _make_manage_skills,
     _make_update_self,
     _make_request_skills,
+    _make_skill_tool,
     _TurnState,
     BrainTool,
 )
@@ -116,7 +117,9 @@ class Brain:
 
         # Add addon skills
         for skill_name in self.skills.all_skill_names():
-            tools.append(self.skills.get_skill_as_tool(skill_name))
+            skill = self.skills.get_skill(skill_name)
+            if skill is not None:
+                tools.append(_make_skill_tool(skill))
 
         return tools
 
