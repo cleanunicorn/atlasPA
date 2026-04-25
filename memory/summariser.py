@@ -64,6 +64,7 @@ async def maybe_summarise(store: MemoryStore, provider: BaseLLMProvider) -> bool
                 "into a dense, accurate summary. Never lose important facts. "
                 "Output only the summary paragraph."
             ),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
         )
         summary = (response.content or "").strip()
         if not summary:
@@ -151,6 +152,7 @@ async def maybe_summarise_history(
         response = await provider.complete(
             messages=[Message(role="user", content=prompt)],
             system="You are a conversation summarizer. Distill the history into a concise background block.",
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
         )
         summary = (response.content or "").strip()
         if not summary:

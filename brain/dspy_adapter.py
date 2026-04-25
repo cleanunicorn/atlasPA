@@ -2,6 +2,7 @@ import dspy
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Optional
 from providers.base import BaseLLMProvider, Message, ToolDefinition
 from brain.tools import BrainTool
@@ -15,6 +16,7 @@ class AtlasLM(dspy.LM):
     """
     def __init__(self, atlas_provider: BaseLLMProvider, **kwargs):
         self.atlas_provider = atlas_provider
+        kwargs.setdefault("max_tokens", int(os.getenv("LLM_MAX_TOKENS", "4096")))
         super().__init__(model=atlas_provider.model_name, **kwargs)
 
     @property

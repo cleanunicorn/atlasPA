@@ -79,20 +79,22 @@ async def test_remember_triggers_summarise(tmp_path):
     assert any("Summary text" in e.content for e in entries_after)
 
 @pytest.mark.asyncio
-async def test_brain_think_triggers_compaction_full_context():
+async def test_brain_think_triggers_compaction_full_context(monkeypatch):
     from brain.engine import Brain
+    from brain.compactor import SUMMARY_MARKER
     from providers.base import Message, LLMResponse
 
     class MockProviderForBrain(MockProvider):
         async def complete(self, messages, **kwargs):
-            return LLMResponse(content="Final answer")
+            return LLMResponse(content="compact summary")
 
     provider = MockProviderForBrain()
-    # Force a small context window for testing
-    provider.max_context_window = 500
+
+    # Force compactor to trigger by shrinking budget
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "100")
+    monkeypatch.setenv("CONTEXT_COMPACTION_THRESHOLD", "0.5")
 
     memory = AsyncMock()
-    # System prompt is 200 words
     memory.build_system_prompt.return_value = "word " * 200
 
     skills = MagicMock()
@@ -102,20 +104,16 @@ async def test_brain_think_triggers_compaction_full_context():
     brain._select_tools = AsyncMock(return_value=[])
     brain._run_react = AsyncMock(return_value="Final answer")
 
-    # 100 words * 3 messages = 300 "tokens"
-    # System prompt = 200
-    # Total = 500 (>= 80% of 500)
     history = [Message(role="user", content="word " * 100) for _ in range(8)]
 
     await brain.think("Current message", history)
 
-    # Verify if maybe_summarise_history was called indirectly by checking history passed to _run_react.
     args, kwargs = brain._run_react.call_args
     history_str_arg = args[1]
-    assert "[Conversation Summary]:" in history_str_arg
-    # Should have limited lines in history_str_arg (1 summary + 6 recent)
+    assert SUMMARY_MARKER in history_str_arg
+    # 8 msgs halved → cut=4, so 1 summary + 4 recent = 5 non-empty lines
     lines = [l for l in history_str_arg.split("\n") if l.strip()]
-    assert len(lines) == HISTORY_KEEP_RECENT + 1
+    assert len(lines) == 5
 
 @pytest.mark.asyncio
 async def test_remember_tool_is_async_and_summarises(tmp_path):
