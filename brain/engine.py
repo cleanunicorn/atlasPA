@@ -16,13 +16,9 @@ import dspy
 from brain.dspy_adapter import AtlasLM, brain_tool_to_dspy, AtlasSignature
 from providers.base import BaseLLMProvider, Message
 from memory.store import MemoryStore
+from memory.summariser import maybe_summarise_history
 from skills.registry import SkillRegistry
-
-from brain.tools import (  # noqa: F401 — re-exported for tests
-    BrainTool,
-    _TurnState,
-    _run_skill_sync,
-    _make_skill_tool,
+from brain.tools import (
     _make_remember,
     _make_forget,
     _make_set_location,
@@ -35,91 +31,72 @@ from brain.tools import (  # noqa: F401 — re-exported for tests
     _make_reflect,
     _make_reload,
     _make_manage_skills,
-    _make_run_claude,
     _make_update_self,
     _make_request_skills,
+    _TurnState,
+    BrainTool,
 )
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 30
-MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-TOOL_SELECTION_THRESHOLD = 30
+# ReAct parameters
+MAX_ITERATIONS = 8
 TRACE_DIR = Path("logs/traces")
+TRACE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Tools that are always available regardless of selection
-_ALWAYS_INCLUDED_TOOLS = frozenset({
-    "ask_user",
-    "request_skills",
-})
-
-# ── Response sanitisation ────────────────────────────────────────────────────
-
-_TOOL_BLOCK_RE = re.compile(
-    r"<(?:tool_call|function_calls|parameter)\b[^>]*>.*?</(?:tool_call|function_calls|parameter)>",
-    re.DOTALL | re.IGNORECASE,
-)
-_TOOL_TAG_RE = re.compile(
-    r"</?(?:tool_call|function_calls|function|parameter)\b[^>]*>",
-    re.IGNORECASE,
-)
-_MULTI_BLANK_RE = re.compile(r"\n{3,}")
-
-
-def _clean_response(text: str) -> str:
-    """Strip leaked tool-call XML fragments from the model's text output."""
-    text = _TOOL_BLOCK_RE.sub("", text)
-    text = _TOOL_TAG_RE.sub("", text)
-    text = _MULTI_BLANK_RE.sub("\n\n", text)
-    return text.strip()
-
-
-# ── Helper: extract text from multimodal content ────────────────────────────
+# ── Internals ───────────────────────────────────────────────────────────────
 
 
 def _extract_text(content: str | list) -> str:
-    """Extract plain text from a message content (handles multimodal blocks)."""
+    """Extract plain text from multimodal content blocks."""
     if isinstance(content, str):
         return content
     return " ".join(b.get("text", "") for b in content if b.get("type") == "text")
 
 
-# ── Brain ────────────────────────────────────────────────────────────────────
+def _clean_response(text: str) -> str:
+    """Strip 'Answer:' prefix or similar if DSPy leaves it in."""
+    text = re.sub(r"^(Answer|Response):\s*", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 class Brain:
     """
-    ReAct reasoning engine using DSPy.
+    Atlas reasoning engine. Handles tool selection and the ReAct loop.
     """
 
     def __init__(
-        self, provider: BaseLLMProvider, memory: MemoryStore, skills: SkillRegistry
-    ):
+        self,
+        provider: BaseLLMProvider,
+        memory: MemoryStore,
+        skills: SkillRegistry,
+    ) -> None:
         self.provider = provider
         self.memory = memory
         self.skills = skills
+        self.lm = AtlasLM(provider)
+        self.heartbeat = None  # Injected by main.py
+
         self._pending_files: list[tuple[Path, str]] = []
         self._current_plan: str | None = None
-        self.heartbeat = None
-        self._session_tokens: dict[str, int] = {"input": 0, "output": 0}
-        self._selected_tools: list[str] | None = None  # cached tool/skill selection
+        self._session_tokens = {"input": 0, "output": 0}
 
-        # DSPy setup
-        self.lm = AtlasLM(provider)
+    def _build_tools(self, state: _TurnState, selected_tools: list[str]) -> list:
+        """
+        Build the list of tool instances for the current turn.
+        Only includes tools explicitly selected or requested.
+        """
+        all_tools = self._create_tools(state)
 
-        if not TRACE_DIR.exists():
-            TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        # Filter to only the selected ones
+        return [t for t in all_tools if t.name in selected_tools]
 
-        logger.info(f"Brain ready (DSPy): {provider.model_name}")
-
-    # ── Tool construction ────────────────────────────────────────────────────
-
-    def _all_candidate_tools(
+    def _create_tools(
         self, state: _TurnState
     ) -> list[BrainTool]:
         """Build every possible tool (built-ins + all skills). Unfiltered."""
         tools = [
-            _make_remember(self.memory),
+            _make_remember(self.memory, self.provider),
             _make_forget(self.memory),
             _make_set_location(self.memory),
             _make_send_file(state),
@@ -134,60 +111,29 @@ class Brain:
             _make_update_self(self),
             _make_request_skills(state, self.skills),
         ]
-        if os.getenv("CLAUDE_CODE_AVAILABLE", "").lower() == "true":
-            tools.append(_make_run_claude())
-        for skill in self.skills._skills.values():
-            try:
-                tools.append(_make_skill_tool(skill))
-            except Exception as e:
-                logger.warning(f"Could not wrap skill '{skill.name}': {e}")
+
+        # Add addon skills
+        for skill_name in self.skills.all_skill_names():
+            tools.append(self.skills.get_skill_as_tool(skill_name))
+
         return tools
 
-    def _build_tools(
-        self, state: _TurnState, selected_tools: list[str]
-    ) -> list[BrainTool]:
-        """Build the filtered tool list for one turn."""
-        selected = set(selected_tools) | _ALWAYS_INCLUDED_TOOLS
-        return [
-            t for t in self._all_candidate_tools(state)
-            if t.name in selected
-        ]
-
-    # ── Tool selection ──────────────────────────────────────────────────────
-
     def _tool_catalog(self) -> tuple[list[str], str]:
-        """Build a catalog of all available tools (names + descriptions).
-
-        Returns (all_names, catalog_text) where catalog_text is a compact
-        summary suitable for the selection LLM call.
-        """
+        """Get names and descriptions of all available tools."""
         state = _TurnState()
-        candidates = self._all_candidate_tools(state)
-        # Exclude always-included tools from the catalog — they're implicit
-        filterable = [t for t in candidates if t.name not in _ALWAYS_INCLUDED_TOOLS]
-        all_names = [t.name for t in filterable]
-        lines = []
-        for t in filterable:
-            # Truncate long descriptions to keep the prompt lean
-            desc = (t.description or "").split("\n")[0][:200]
-            lines.append(f"  - **{t.name}**: {desc}")
-        return all_names, "\n".join(lines)
+        tools = self._create_tools(state)
+
+        names = [t.name for t in tools]
+        catalog_lines = [f"- {t.name}: {t.description}" for t in tools]
+
+        return names, "\n".join(catalog_lines)
 
     async def _select_tools(self, query_text: str) -> list[str]:
-        """Pick relevant tools and skills for a query via a lightweight LLM call.
-
-        Returns a list of tool names to include. Always returns a concrete list.
-        Tools in _ALWAYS_INCLUDED_TOOLS are added automatically by _build_tools.
+        """
+        Ask the LLM to pick which tools are relevant for the current query.
+        This keeps the context window clean by only injecting relevant skill docs.
         """
         all_names, catalog = self._tool_catalog()
-        if not all_names:
-            return []
-
-        if len(all_names) < TOOL_SELECTION_THRESHOLD:
-            logger.debug(
-                f"Skipping tool selection ({len(all_names)} < {TOOL_SELECTION_THRESHOLD})"
-            )
-            return all_names
 
         system = (
             "You are a tool router. Given the user's request and a list of "
@@ -343,6 +289,15 @@ class Brain:
         if system_suffix:
             system_prompt += "\n\n---\n" + system_suffix
 
+        # Compact history if close to context limit
+        # Calculate tokens for fixed parts (system prompt + current query)
+        fixed_tokens = self.provider.count_tokens(system_prompt) + self.provider.count_tokens(query_text)
+
+        conversation_history = await maybe_summarise_history(
+            conversation_history, self.provider, self.provider.max_context_window,
+            extra_tokens=fixed_tokens
+        )
+
         history_str = ""
         for m in conversation_history:
             history_str += f"{m.role}: {m.content}\n"
@@ -418,15 +373,19 @@ class Brain:
             response = await self.provider.complete(
                 messages=[Message(role="user", content=content)],
                 system=system,
-                max_tokens=MAX_TOKENS,
+                max_tokens=4096,
                 json_mode=True,
             )
             raw = response.content or ""
 
         raw = raw.strip()
         if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw)
+            fence_match = re.search(r"```[a-z]*\n?(.*?)\n?```", raw, re.DOTALL)
+            if fence_match:
+                raw = fence_match.group(1).strip()
+            else:
+                raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
         try:
             return _json.loads(raw)
         except _json.JSONDecodeError as exc:
