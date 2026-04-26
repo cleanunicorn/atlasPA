@@ -364,6 +364,8 @@ def _make_update_self(brain_ref) -> BrainTool:
                 logger.warning(f"Pre-update check failed: {e}")
 
         # ── Step 1: git pull ────────────────────────────────────────────────────
+        from heartbeat.updater import _git_env
+
         try:
             result = _subprocess.run(
                 ["git", "pull"],
@@ -371,6 +373,7 @@ def _make_update_self(brain_ref) -> BrainTool:
                 text=True,
                 timeout=60,
                 cwd=root,
+                env=_git_env(),
             )
             pull_out = (result.stdout + result.stderr).strip()
             if result.returncode != 0:
