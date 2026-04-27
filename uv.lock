@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -214,7 +214,7 @@ dependencies = [
     { name = "apscheduler" },
     { name = "ddgs" },
     { name = "discord-py" },
-    { name = "dspy-ai" },
+    { name = "dspy" },
     { name = "fastapi" },
     { name = "google-api-python-client" },
     { name = "google-auth-httplib2" },
@@ -240,7 +240,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.10,<4" },
     { name = "ddgs", specifier = ">=9.11.2" },
     { name = "discord-py", specifier = ">=2.3" },
-    { name = "dspy-ai", specifier = ">=3.2.0" },
+    { name = "dspy", specifier = ">=3.2.0" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "google-api-python-client", specifier = ">=2.120" },
     { name = "google-auth-httplib2", specifier = ">=0.2" },
@@ -727,18 +727,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9e/38/ab4b3ba261962cf1cd0456113253290329de5c80296ce968f060195c4a03/dspy-3.2.0.tar.gz", hash = "sha256:70593061e8d3df7924e6b7bfe5e61d064e5990f1505b82380b49252b00a88fd7", size = 278448, upload-time = "2026-04-21T17:15:49.917Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/aa/5b064672fe12bdeb36bda5a70213a773122166ded763d2ccf4dad6eb145b/dspy-3.2.0-py3-none-any.whl", hash = "sha256:cbf82a3ddcd69df071db6cdf7455e7304d66cd47fcb09c856454739414e16d89", size = 331038, upload-time = "2026-04-21T17:15:48.703Z" },
-]
-
-[[package]]
-name = "dspy-ai"
-version = "3.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dspy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/c3/fbe81d4eac35e81fbacbbad255a49efb46e43daf1f89103bf86e445e13b5/dspy_ai-3.2.0.tar.gz", hash = "sha256:ec43e535124f7f07f232a2310d4194aa5cc91665559cd2d9829398e606296be4", size = 1124, upload-time = "2026-04-21T17:15:58.097Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/dc/532f6996603fc30d7f55366751cc843e6e95f312776241e928cd3b21391f/dspy_ai-3.2.0-py3-none-any.whl", hash = "sha256:cdd078d67619a1b86fc3ff5343d91fcefd38a4eb1f6b0aa2179f4cf74e1adde9", size = 1095, upload-time = "2026-04-21T17:15:56.92Z" },
 ]
 
 [[package]]

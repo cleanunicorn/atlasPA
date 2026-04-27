@@ -24,7 +24,7 @@ dependencies = [
     "pydub>=0.25",
     "sentence-transformers>=3.0",
     "ruff>=0.15.8",
-    "dspy-ai>=3.2.0",
+    "dspy>=3.2.0",
     "nest-asyncio>=1.6.0",
 ]
 
