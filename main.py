@@ -30,6 +30,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 ROOT = Path(__file__).parent
+from channels.base import BaseChannel
 from paths import ENV_FILE  # noqa: E402  (after Path)
 
 ENV_EXAMPLE = ROOT / "config" / ".env.example"  # template stays in repo
@@ -617,7 +618,7 @@ async def _run_agent(mode: str) -> None:
     await _run_with_heartbeat(brain, channel)
 
 
-async def _run_with_heartbeat(brain, channel) -> None:
+async def _run_with_heartbeat(brain, channel: BaseChannel) -> None:
     from heartbeat import Heartbeat
 
     heartbeat = Heartbeat(brain=brain, notify_callback=channel.push_message)

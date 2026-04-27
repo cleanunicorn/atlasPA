@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from memory.history import ConversationHistory
+from channels.base import BaseChannel
 from paths import DATA_DIR, UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ _FILES_DIR = DATA_DIR
 _UPLOAD_DIR = UPLOADS_DIR
 
 
-class WebBot:
+class WebBot(BaseChannel):
     """
     Browser-based chat channel powered by FastAPI + WebSockets.
 
@@ -55,6 +56,7 @@ class WebBot:
     """
 
     def __init__(self, brain, host: str = "", port: int = 0):
+        super().__init__()
         self.brain = brain
         self._host = host or os.getenv("WEB_HOST", "0.0.0.0")
         self._port = port or int(os.getenv("WEB_PORT", "7860"))

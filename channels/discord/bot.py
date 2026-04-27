@@ -31,6 +31,7 @@ import aiohttp
 import discord
 from discord import app_commands
 from memory.history import ConversationHistory
+from channels.base import BaseChannel
 from paths import UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _UPLOAD_DIR = UPLOADS_DIR
 
 
-class DiscordBot:
+class DiscordBot(BaseChannel):
     """
     Discord channel adapter built on discord.py.
 
@@ -50,6 +51,7 @@ class DiscordBot:
     """
 
     def __init__(self, brain):
+        super().__init__()
         self.brain = brain
         self._history = ConversationHistory()
 
@@ -58,20 +60,7 @@ class DiscordBot:
             raise ValueError("DISCORD_BOT_TOKEN not set in environment")
         self._token = token
 
-        allowed_raw = os.getenv("DISCORD_ALLOWED_USERS", "")
-        self._allowed_users: set[int] = set()
-        if allowed_raw.strip():
-            for uid in allowed_raw.split(","):
-                try:
-                    self._allowed_users.add(int(uid.strip()))
-                except ValueError:
-                    logger.warning(f"Invalid user ID in DISCORD_ALLOWED_USERS: {uid}")
-
-        if not self._allowed_users:
-            logger.warning(
-                "DISCORD_ALLOWED_USERS is empty — bot will respond to ANYONE. "
-                "Set this to your Discord user ID for security."
-            )
+        self._parse_allowed_users("DISCORD_ALLOWED_USERS", "Discord")
 
         intents = discord.Intents.default()
         intents.message_content = True
@@ -82,11 +71,6 @@ class DiscordBot:
         self._register_commands()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _is_allowed(self, user_id: int) -> bool:
-        if not self._allowed_users:
-            return True
-        return user_id in self._allowed_users
 
     def _user_id_str(self, user: discord.User | discord.Member) -> str:
         return f"discord_{user.id}"
