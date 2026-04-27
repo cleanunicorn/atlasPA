@@ -70,10 +70,14 @@ class Skill:
         """Execute this skill's run() function. Supports sync and async."""
         if self._module is None:
             return f"Error: {self.name}/tool.py not found or failed to load"
+        module_run = getattr(self._module, "run", None)
+        if module_run is None:
+            return f"Error: skill '{self.name}' has no run() function"
         try:
-            result = self._module.run(**kwargs)
-            if asyncio.iscoroutine(result):
-                return await result
+            if asyncio.iscoroutinefunction(module_run):
+                result = await module_run(**kwargs)
+            else:
+                result = await asyncio.to_thread(module_run, **kwargs)
             return str(result)
         except Exception as e:
             logger.exception(f"Skill '{self.name}' raised an error")

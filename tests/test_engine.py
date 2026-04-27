@@ -18,7 +18,6 @@ from brain.engine import (
 )
 from brain.tools import (
     _TurnState,
-    _run_skill_sync,
     _make_skill_tool,
     _make_remember,
     _make_forget,
@@ -255,24 +254,14 @@ def test_turn_state_initialization():
     assert state.current_plan is None
 
 
-def test_run_skill_sync():
-    """Bridge function executes skill run()."""
-    mock_skill = MagicMock()
-    mock_skill.run.return_value = "skill result"
-    result = _run_skill_sync(mock_skill, {"a": 1})
-    assert result == "skill result"
-    mock_skill.run.assert_called_with(a=1)
-
-
 @pytest.mark.asyncio
 async def test_make_skill_tool_is_async_bridge():
-    """_make_skill_tool wraps a sync skill in an async function."""
+    """_make_skill_tool wraps a skill in an async function that awaits Skill.run."""
     mock_skill = MagicMock()
     mock_skill.name = "test"
     mock_skill.description = "desc"
     mock_skill._module = MagicMock()
-    # Skills are run in thread, so mock the run to be a regular function
-    mock_skill.run = MagicMock(return_value="res")
+    mock_skill.run = AsyncMock(return_value="res")
 
     tool = _make_skill_tool(mock_skill)
     assert tool.name == "skill_test"
@@ -280,6 +269,7 @@ async def test_make_skill_tool_is_async_bridge():
 
     result = await tool(x=10)
     assert result == "res"
+    mock_skill.run.assert_awaited_with(x=10)
 
 
 @pytest.mark.asyncio
