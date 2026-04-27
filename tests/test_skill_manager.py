@@ -8,6 +8,7 @@ Tests for the addon skill management system:
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import pytest
 
 
 # ── SkillRegistry fixtures ─────────────────────────────────────────────────────
@@ -83,6 +84,29 @@ def test_install_skill_immediately_available(tmp_path):
 
     assert skill is not None
     assert skill.source == "addon"
+
+
+@pytest.mark.asyncio
+async def test_sync_run_wrapper_returning_coroutine_is_awaited(tmp_path):
+    from skills.registry import Skill
+
+    skill_dir = tmp_path / "wrapped"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# wrapped")
+    (skill_dir / "tool.py").write_text(
+        """\
+async def _actual(msg: str) -> str:
+    return f"wrapped: {msg}"
+
+def run(msg: str = "ok", **_):
+    return _actual(msg)
+"""
+    )
+
+    skill = Skill("wrapped", "wrapped skill", skill_dir)
+    result = await skill.run(msg="hello")
+
+    assert result == "wrapped: hello"
 
 
 def test_install_invalid_name(tmp_path):

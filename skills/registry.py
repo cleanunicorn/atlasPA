@@ -22,6 +22,7 @@ Design:
 import ast
 import asyncio
 import importlib.util
+import inspect
 import logging
 import shutil
 from pathlib import Path
@@ -78,6 +79,8 @@ class Skill:
                 result = await module_run(**kwargs)
             else:
                 result = await asyncio.to_thread(module_run, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
             return str(result)
         except Exception as e:
             logger.exception(f"Skill '{self.name}' raised an error")
