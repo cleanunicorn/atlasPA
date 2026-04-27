@@ -70,18 +70,6 @@ class _TurnState:
     requested_skills: list = field(default_factory=list)  # set by request_skills
 
 
-# ── Async skill bridge ───────────────────────────────────────────────────────
-
-
-def _run_skill_sync(skill: Skill, kwargs: dict):
-    """Run a skill's run() function.
-
-    If the skill is async, returns the coroutine so the caller
-    (_execute_tool) can await it — avoids nesting event loops.
-    """
-    return skill.run(**kwargs)
-
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -134,10 +122,7 @@ def _make_skill_tool(skill: Skill) -> BrainTool:
     captured = skill
 
     async def wrapper(**kwargs):
-        # Skills are normally sync; run in thread to avoid blocking loop
-        import asyncio
-
-        return await asyncio.to_thread(_run_skill_sync, captured, kwargs)
+        return await captured.run(**kwargs)
 
     return BrainTool(
         name=f"skill_{skill.name}",
