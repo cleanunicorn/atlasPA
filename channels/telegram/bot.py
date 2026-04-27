@@ -30,6 +30,7 @@ from telegram.ext import (
     filters,
 )
 from memory.history import ConversationHistory
+from channels.base import BaseChannel
 from channels.telegram.formatting import md_to_html
 from paths import UPLOADS_DIR
 
@@ -49,44 +50,24 @@ _MAIN_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 
-class TelegramBot:
+class TelegramBot(BaseChannel):
     def __init__(self, brain, on_message_callback=None):
         """
         Args:
             brain:                  The Brain instance.
             on_message_callback:    Optional async callback for routing (used by Gateway).
         """
+        super().__init__()
         self.brain = brain
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN not set in environment")
 
-        # Persistent conversation history (survives restarts)
         self._history = ConversationHistory()
-
-        # Allowed user IDs (security gate)
-        allowed_raw = os.getenv("TELEGRAM_ALLOWED_USERS", "")
-        self._allowed_users: set[int] = set()
-        if allowed_raw.strip():
-            for uid in allowed_raw.split(","):
-                try:
-                    self._allowed_users.add(int(uid.strip()))
-                except ValueError:
-                    logger.warning(f"Invalid user ID in TELEGRAM_ALLOWED_USERS: {uid}")
-
-        if not self._allowed_users:
-            logger.warning(
-                "⚠️  TELEGRAM_ALLOWED_USERS is empty — bot will respond to ANYONE. "
-                "Set this to your Telegram user ID for security."
-            )
+        self._parse_allowed_users("TELEGRAM_ALLOWED_USERS", "Telegram")
 
         self.app = Application.builder().token(self.token).build()
         self._register_handlers()
-
-    def _is_allowed(self, user_id: int) -> bool:
-        if not self._allowed_users:
-            return True
-        return user_id in self._allowed_users
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self._cmd_start))

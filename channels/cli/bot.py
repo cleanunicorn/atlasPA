@@ -19,13 +19,14 @@ import logging
 import os
 from pathlib import Path
 from memory.history import ConversationHistory
+from channels.base import BaseChannel
 
 logger = logging.getLogger(__name__)
 
 CLI_USER_ID = "cli"
 
 
-class CLIBot:
+class CLIBot(BaseChannel):
     """
     Simple readline-based CLI channel for local testing.
 
@@ -39,6 +40,7 @@ class CLIBot:
         Args:
             brain: The Brain instance to forward messages to.
         """
+        super().__init__()
         self.brain = brain
         self._history_store = ConversationHistory()
         self._running = False
@@ -169,6 +171,13 @@ class CLIBot:
             f"   Skills:            {', '.join(skills) or 'none'}\n"
             f"   Tokens (session):  {tokens['input']} in / {tokens['output']} out\n"
         )
+
+    async def push_message(self, text: str, files: list | None = None) -> None:
+        """CLI has no background session to push to; print to stdout instead."""
+        print(f"\n[Heartbeat] {text}")
+        for path, caption in files or []:
+            note = f" — {caption}" if caption else ""
+            print(f"[Heartbeat] File: {path}{note}")
 
     async def stop(self) -> None:
         """Signal the CLI loop to stop."""
