@@ -7,6 +7,7 @@ LLM provider for Anthropic's Claude models.
 import os
 import anthropic
 from .base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
+from .settings import DEFAULT_MAX_TOKENS
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -23,7 +24,7 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         json_mode: bool = False,
     ) -> LLMResponse:
 

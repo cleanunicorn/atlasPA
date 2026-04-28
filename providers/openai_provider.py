@@ -9,6 +9,7 @@ import os
 from collections.abc import Callable, Awaitable
 import openai
 from .base import BaseLLMProvider, Message, ToolDefinition, ToolCall, LLMResponse
+from .settings import DEFAULT_MAX_TOKENS
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -31,7 +32,7 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         json_mode: bool = False,
     ) -> LLMResponse:
         """Send messages to OpenAI and return a unified LLMResponse."""
@@ -100,7 +101,7 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Stream tokens via on_token callback; return full LLMResponse when done."""

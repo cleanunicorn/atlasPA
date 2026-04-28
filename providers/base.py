@@ -8,6 +8,7 @@ Every provider must implement `complete()` — that's the only contract.
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Awaitable
 from dataclasses import dataclass, field
+from .settings import DEFAULT_MAX_TOKENS
 
 
 @dataclass
@@ -63,7 +64,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         json_mode: bool = False,
     ) -> LLMResponse:
         """
@@ -87,7 +88,7 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """

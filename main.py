@@ -430,6 +430,10 @@ def _run_setup() -> None:
         default=existing.get("LLM_PROVIDER", "ollama"),
         choices=["anthropic", "openai", "ollama", "openrouter"],
     )
+    config["LLM_MAX_TOKENS"] = Prompt.ask(
+        "Max output tokens per response",
+        default=existing.get("LLM_MAX_TOKENS", "8192"),
+    )
 
     provider = config["LLM_PROVIDER"]
 
@@ -516,7 +520,7 @@ def _write_env(config: dict[str, str]) -> None:
         ),
         (
             "# ── LLM Provider ─────────────────────────────────────────────────────────────",
-            ["LLM_PROVIDER"],
+            ["LLM_PROVIDER", "LLM_MAX_TOKENS"],
         ),
         (
             "# ── Anthropic (Claude) ────────────────────────────────────────────────────────",

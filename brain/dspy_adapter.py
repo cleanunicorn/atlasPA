@@ -16,7 +16,7 @@ class AtlasLM(dspy.LM):
     """
     def __init__(self, atlas_provider: BaseLLMProvider, **kwargs):
         self.atlas_provider = atlas_provider
-        kwargs.setdefault("max_tokens", int(os.getenv("LLM_MAX_TOKENS", "4096")))
+        kwargs.setdefault("max_tokens", int(os.getenv("LLM_MAX_TOKENS", "8192")))
         super().__init__(model=atlas_provider.model_name, **kwargs)
 
     @property

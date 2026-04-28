@@ -151,7 +151,7 @@ async def maybe_compact_history(
         response = await provider.complete(
             messages=[Message(role="user", content=old_text)],
             system=system_prompt,
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
         )
         summary = (response.content or "").strip()
         if not summary:
