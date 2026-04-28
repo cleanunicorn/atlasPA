@@ -16,6 +16,7 @@ from pathlib import Path
 
 from collections.abc import Callable, Awaitable
 from .base import BaseLLMProvider, Message, ToolDefinition, LLMResponse
+from .settings import DEFAULT_MAX_TOKENS
 
 
 def _message_to_dict(msg: Message) -> dict:
@@ -50,7 +51,7 @@ class LoggingProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         json_mode: bool = False,
     ) -> LLMResponse:
         ts = datetime.now(timezone.utc).isoformat()
@@ -91,7 +92,7 @@ class LoggingProvider(BaseLLMProvider):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         system: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         on_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Stream via inner provider; log the completed response afterward."""

@@ -39,7 +39,7 @@ AWARENESS_CONSOLIDATION_THRESHOLD = int(
 AWARENESS_LOG_FILE = MEMORY_DIR / "awareness_log.json"
 EMBEDDINGS_FILE = MEMORY_DIR / "embeddings.json"
 
-MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────

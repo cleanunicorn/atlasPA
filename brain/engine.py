@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 # ReAct parameters
 MAX_ITERATIONS = 8
-MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 TRACE_DIR = Path("logs/traces")
 TRACE_DIR.mkdir(parents=True, exist_ok=True)
 
