@@ -430,7 +430,7 @@ def _run_setup() -> None:
         default=existing.get("LLM_PROVIDER", "ollama"),
         choices=["anthropic", "openai", "ollama", "openrouter"],
     )
-    config["LLM_MAX_TOKENS"] = Prompt.ask(
+    config["LLM_MAX_TOKENS"] = _prompt_positive_integer(
         "Max output tokens per response",
         default=existing.get("LLM_MAX_TOKENS", "8192"),
     )
@@ -507,6 +507,15 @@ def _run_setup() -> None:
 
     _write_env(config)
     console.print(f"\n[green]✓[/green] Saved to [bold]{ENV_FILE}[/bold]")
+
+
+def _prompt_positive_integer(label: str, *, default: str) -> str:
+    """Prompt until the user provides a positive integer string."""
+    while True:
+        value = Prompt.ask(label, default=default).strip()
+        if value.isdigit() and int(value) > 0:
+            return value
+        console.print("[bold red]Please enter a positive whole number.[/bold red]")
 
 
 def _write_env(config: dict[str, str]) -> None:
